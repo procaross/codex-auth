@@ -2,6 +2,20 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
+### Native macOS menu bar app
+
+This fork also includes a [native macOS 26 menu bar companion](native/menubar/README.md)
+with Liquid Glass, an animated halftone robot, Chinese account / quota cards,
+subscription snapshots, and reset news. It bundles the CLI and defaults to the
+local proxy on port 7890. Account switching still requires a manual Codex restart.
+
+```sh
+./scripts/build-macos-menubar.sh /tmp/codex-auth-app ./zig-out/bin/codex-auth
+```
+
+Install the resulting `Codex Auth.app` in Applications, then open its menu bar
+icon. See the linked guide for build requirements, demo mode, and validation.
+
 ## This fork: halftone dashboard, subscription dates and reset news
 
 The default `fork-main` branch is based on upstream **v0.2.10**. The original
