@@ -1,6 +1,8 @@
 const std = @import("std");
 
-/// ASCII frames, with UTF-8-aware wrapping for account and workspace names.
+pub const Span = struct { text: []const u8, tone: []const u8 = "" };
+
+/// UTF-8-aware rows with optional frames and independently styled text spans.
 pub const Panel = struct {
     out: *std.Io.Writer,
     width: usize,
@@ -31,11 +33,27 @@ pub const Panel = struct {
     }
 
     pub fn line(self: Panel, text: []const u8, tone: []const u8) !void {
+        try self.spans(&.{.{ .text = text, .tone = tone }});
+    }
+
+    pub fn spans(self: Panel, parts: []const Span) !void {
         const allocator = std.heap.page_allocator;
-        const safe = try sanitize(allocator, text);
-        defer allocator.free(safe);
-        var remaining: []const u8 = safe;
+        const Band = struct { start: usize, end: usize, tone: []const u8 };
+        var text: std.Io.Writer.Allocating = .init(allocator);
+        defer text.deinit();
+        var bands = std.ArrayList(Band).empty;
+        defer bands.deinit(allocator);
+        for (parts) |part| {
+            const safe = try sanitize(allocator, part.text);
+            defer allocator.free(safe);
+            const start = text.written().len;
+            try text.writer.writeAll(safe);
+            try bands.append(allocator, .{ .start = start, .end = text.written().len, .tone = part.tone });
+        }
+        const safe = text.written();
+        var start: usize = 0;
         while (true) {
+            const remaining = safe[start..];
             var end: usize = 0;
             var cells: usize = 0;
             var last_space: ?usize = null;
@@ -48,7 +66,6 @@ pub const Panel = struct {
                 end += part.len;
                 cells += n;
             }
-            // Wrap at word boundaries; split long identifiers only between code points.
             if (end < remaining.len) {
                 if (last_space) |space| end = space;
             }
@@ -58,9 +75,14 @@ pub const Panel = struct {
                 try self.out.writeAll("| ");
                 try self.reset(self.border_color);
             }
-            try self.color(tone);
-            try self.out.writeAll(fragment);
-            try self.reset(tone);
+            for (bands.items) |band| {
+                const lo = @max(start, band.start);
+                const hi = @min(start + fragment.len, band.end);
+                if (lo >= hi) continue;
+                try self.color(band.tone);
+                try self.out.writeAll(safe[lo..hi]);
+                try self.reset(band.tone);
+            }
             try repeat(self.out, ' ', self.inner() - displayWidth(fragment));
             if (self.framed) {
                 try self.color(self.border_color);
@@ -68,10 +90,40 @@ pub const Panel = struct {
                 try self.reset(self.border_color);
             }
             try self.out.writeByte('\n');
-            if (end == remaining.len) break;
-            remaining = std.mem.trimStart(u8, remaining[end..], " ");
-            if (remaining.len == 0) break;
+            start += end;
+            if (start == safe.len) break;
+            while (start < safe.len and safe[start] == ' ') start += 1;
+            if (start == safe.len) break;
         }
+    }
+
+    pub fn columns(self: Panel, left: []const Span, right: []const Span) !void {
+        var used: usize = 0;
+        for (left) |part| used += displayWidth(part.text);
+        for (right) |part| used += displayWidth(part.text);
+        if (used + 2 > self.inner()) {
+            try self.spans(left);
+            try self.spans(right);
+            return;
+        }
+        const allocator = std.heap.page_allocator;
+        const padding = try allocator.alloc(u8, self.inner() - used);
+        defer allocator.free(padding);
+        @memset(padding, ' ');
+        var parts = std.ArrayList(Span).empty;
+        defer parts.deinit(allocator);
+        try parts.appendSlice(allocator, left);
+        try parts.append(allocator, .{ .text = padding });
+        try parts.appendSlice(allocator, right);
+        try self.spans(parts.items);
+    }
+
+    pub fn rule(self: Panel, tone: []const u8) !void {
+        const allocator = std.heap.page_allocator;
+        var text: std.Io.Writer.Allocating = .init(allocator);
+        defer text.deinit();
+        for (0..self.inner()) |_| try text.writer.writeAll(if (self.dotted) "─" else "-");
+        try self.line(text.written(), tone);
     }
 
     fn color(self: Panel, tone: []const u8) !void {
@@ -136,4 +188,37 @@ test "pixel panels wrap long UTF-8 names and neutralize terminal control charact
         try std.testing.expect(std.unicode.utf8ValidateSlice(line));
     }
     try std.testing.expect(std.mem.indexOfScalar(u8, writer.buffered(), 0x1b) == null);
+}
+
+test "styled spans preserve wrapping and sanitize content independently of color" {
+    const allocator = std.testing.allocator;
+    var colored_buffer: [4096]u8 = undefined;
+    var plain_buffer: [4096]u8 = undefined;
+    var colored: std.Io.Writer = .fixed(&colored_buffer);
+    var plain: std.Io.Writer = .fixed(&plain_buffer);
+    const content = "交易账户 cafe\u{301} / long-unbroken-email@example.com\x1b[31m";
+    try (Panel{ .out = &colored, .width = 24, .framed = false }).spans(&.{
+        .{ .text = "01  ", .tone = "\x1b[2m" },
+        .{ .text = content, .tone = "\x1b[1m\x1b[36m" },
+        .{ .text = "  ACTIVE" },
+    });
+    try (Panel{ .out = &plain, .width = 24, .framed = false }).spans(&.{
+        .{ .text = "01  " }, .{ .text = content }, .{ .text = "  ACTIVE" },
+    });
+    var stripped: std.Io.Writer.Allocating = .init(allocator);
+    defer stripped.deinit();
+    var offset: usize = 0;
+    const bytes = colored.buffered();
+    while (offset < bytes.len) : (offset += 1) {
+        if (bytes[offset] == 0x1b) {
+            while (offset < bytes.len and bytes[offset] != 'm') offset += 1;
+        } else try stripped.writer.writeByte(bytes[offset]);
+    }
+    try std.testing.expectEqualStrings(plain.buffered(), stripped.written());
+    try std.testing.expect(std.mem.indexOf(u8, plain.buffered(), "?[31m") != null);
+    var lines = std.mem.tokenizeScalar(u8, stripped.written(), '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line));
+        try std.testing.expectEqual(@as(usize, 24), displayWidth(line));
+    }
 }

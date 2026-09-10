@@ -17,6 +17,10 @@ const ansi = struct {
     const green = "\x1b[32m";
     const bold = "\x1b[1m";
     const teal = "\x1b[38;2;8;131;153m";
+    const muted = "\x1b[38;2;124;139;146m";
+    const rule = "\x1b[38;2;165;181;185m";
+    const coral = "\x1b[38;2;185;101;86m";
+    const amber = "\x1b[38;2;168;131;63m";
     const red = "\x1b[31m";
     const yellow = "\x1b[33m";
 };
@@ -113,7 +117,7 @@ fn writeAccountPanels(
     const width = @max(@as(usize, 24), @min(@as(usize, 160), if (terminal_columns == 0) 128 else terminal_columns));
     var information: std.Io.Writer.Allocating = .init(allocator);
     defer information.deinit();
-    try writeAccountDetails(&information.writer, reg, use_color, usage_overrides, snapshots, portrait.Layout.forWidth(width).infoWidth(width), true);
+    try writeAccountDetails(&information.writer, reg, use_color, usage_overrides, snapshots, @min(@as(usize, 72), portrait.Layout.forWidth(width).infoWidth(width)), true);
     try portrait.write(out, information.written(), width, use_color);
 }
 
@@ -130,11 +134,13 @@ fn writeAccountDetails(
     const now = std.time.timestamp();
     var display = try display_rows.buildDisplayRows(allocator, reg, null);
     defer display.deinit(allocator);
-    if (use_color) try out.writeAll(ansi.teal);
-    try out.writeAll("CODEX AUTH\n");
-    try out.print("{d} ACCOUNTS / QUOTA LEFT\n", .{display.selectable_row_indices.len});
-    if (use_color) try out.writeAll(ansi.reset);
-    try out.writeByte('\n');
+    const heading = pixel.Panel{ .out = out, .width = width, .framed = false, .dotted = dotted };
+    const count = try std.fmt.allocPrint(allocator, "{d:0>2} ACCOUNTS", .{display.selectable_row_indices.len});
+    defer allocator.free(count);
+    try heading.columns(&.{.{ .text = "CODEX / AUTH", .tone = if (use_color) ansi.bold ++ ansi.teal else "" }}, &.{.{ .text = count, .tone = if (use_color) ansi.muted else "" }});
+    try heading.line("REMAINING QUOTA", if (use_color) ansi.muted else "");
+    try heading.rule(if (use_color) ansi.rule else "");
+    try heading.line("", "");
 
     if (display.selectable_row_indices.len == 0) {
         const panel = pixel.Panel{ .out = out, .width = width, .framed = false };
@@ -156,18 +162,19 @@ fn writeAccountDetails(
             .framed = false,
             .dotted = dotted,
         };
-        const title = try std.fmt.allocPrint(allocator, "[{d:0>2}] {s}{s}", .{
-            number + 1, if (row.is_active) "* ACTIVE / " else "", planDisplay(rec, "Unknown"),
-        });
-        defer allocator.free(title);
-        try panel.border(title);
-        try panel.line(rec.email, if (use_color) ansi.bold else "");
+        const number_text = try std.fmt.allocPrint(allocator, "{d:0>2}  ", .{number + 1});
+        defer allocator.free(number_text);
+        try panel.columns(&.{
+            .{ .text = number_text, .tone = if (use_color) ansi.muted else "" },
+            .{ .text = planDisplay(rec, "Unknown"), .tone = if (use_color) ansi.bold else "" },
+        }, &.{.{ .text = if (row.is_active) "* ACTIVE" else "SAVED", .tone = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.muted }});
+        try panel.line(rec.email, if (use_color and row.is_active) ansi.bold else "");
         if (row.depth == 0 and rec.alias.len > 0) try panel.line(rec.alias, "");
         if (row.depth > 0) try panel.line(row.account_cell, "");
         const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
         const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
         defer allocator.free(last);
-        const seen = try std.fmt.allocPrint(allocator, "seen {s}", .{last});
+        const seen = try std.fmt.allocPrint(allocator, "Updated {s}", .{last});
         defer allocator.free(seen);
         try writeAccountStatus(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
         try writePixelQuota(panel, "5H", resolveRateWindow(rec.last_usage, 300, true), usage_override, now, use_color);
@@ -178,11 +185,13 @@ fn writeAccountDetails(
                 try writePixelSubscription(panel, items[account_idx], now, use_color);
             }
         }
-        try panel.border("");
-        try out.writeByte('\n');
+        try panel.line("", "");
+        try panel.rule(if (use_color) ansi.rule else "");
+        try panel.line("", "");
     }
     if (snapshots != null) {
-        try out.writeAll("SUB: login snapshot\nRenewal: unconfirmed\nTimes: local\n");
+        try heading.line("Subscription dates are login snapshots.", if (use_color) ansi.muted else "");
+        try heading.line("Renewal: unconfirmed. All times local.", if (use_color) ansi.muted else "");
     }
 }
 
@@ -207,23 +216,25 @@ fn accountMood(usage: ?registry.RateLimitSnapshot, failure: ?[]const u8, now: i6
     return .ready;
 }
 
+fn statusTone(mood: Mood, use_color: bool) []const u8 {
+    if (!use_color) return "";
+    return switch (mood) {
+        .ready => ansi.teal,
+        .low => ansi.amber,
+        .empty, .failed => ansi.coral,
+        .unknown => ansi.muted,
+    };
+}
+
 fn writeAccountStatus(panel: pixel.Panel, mood: Mood, activity: []const u8, use_color: bool) !void {
-    const allocator = std.heap.page_allocator;
     const label: []const u8 = switch (mood) {
-        .ready => "READY!",
-        .low => "EASY...",
-        .empty => "NAP TIME",
-        .unknown => "HMM...?",
-        .failed => "UH-OH!",
+        .ready => "Ready",
+        .low => "Running low",
+        .empty => "Low quota",
+        .unknown => "No usage data",
+        .failed => "Refresh failed",
     };
-    const tone: []const u8 = if (!use_color) "" else switch (mood) {
-        .ready => ansi.green,
-        .low, .unknown => ansi.yellow,
-        .empty, .failed => ansi.red,
-    };
-    const status = try std.fmt.allocPrint(allocator, "{s} / {s}", .{ label, activity });
-    defer allocator.free(status);
-    try panel.line(status, tone);
+    try panel.columns(&.{.{ .text = label, .tone = statusTone(mood, use_color) }}, &.{.{ .text = activity, .tone = if (use_color) ansi.muted else "" }});
     try panel.line("", "");
 }
 
@@ -237,72 +248,75 @@ fn writePixelQuota(
 ) !void {
     const allocator = std.heap.page_allocator;
     const remaining = quotaRemaining(window, failure, now);
-    const count = @min(@as(usize, 20), panel.inner() - 15);
-    var bars: [20]u8 = undefined;
-    const filled: usize = if (remaining) |value| @intCast(@divTrunc(value * @as(i64, @intCast(count)), 100)) else 0;
-    for (bars[0..count], 0..) |*cell, i| cell.* = if (remaining == null) '?' else if (i < filled or (i == 0 and remaining.? > 0)) '#' else '.';
-    var metric: std.Io.Writer.Allocating = .init(allocator);
-    defer metric.deinit();
-    try metric.writer.print("{s}", .{label});
-    try writeRepeat(&metric.writer, ' ', 6 - label.len);
-    try metric.writer.writeByte('[');
-    for (bars[0..count]) |cell| {
-        if (panel.dotted and cell != '?') {
-            try metric.writer.writeAll(if (cell == '#') "⣿" else "⣀");
-        } else try metric.writer.writeByte(cell);
+    const count: usize = @min(18, panel.inner() - 15);
+    const tone = statusTone(if (failure != null) .failed else if (remaining) |value| (if (value <= 5) .empty else if (value <= 20) .low else .ready) else .unknown, use_color);
+    const muted = if (use_color) ansi.muted else "";
+    var filled: std.Io.Writer.Allocating = .init(allocator);
+    defer filled.deinit();
+    var empty: std.Io.Writer.Allocating = .init(allocator);
+    defer empty.deinit();
+    // Four central dots make a fine horizontal ribbon, with quarter-cell precision.
+    var dots: usize = if (remaining) |value| @intCast(@max(if (value > 0) @as(i64, 1) else 0, @divTrunc(value * @as(i64, @intCast(count * 4)), 100))) else 0;
+    const partial = [_][]const u8{ "", "⠄", "⠆", "⠖", "⠶" };
+    for (0..count) |_| {
+        if (dots > 0) {
+            const n = @min(@as(usize, 4), dots);
+            try filled.writer.writeAll(if (panel.dotted) partial[n] else "=");
+            dots -= n;
+        } else try empty.writer.writeAll(if (remaining == null) "?" else if (panel.dotted) "·" else ".");
     }
-    try metric.writer.writeAll("] ");
-    if (failure) |value| {
-        try metric.writer.print("{s}", .{value});
-    } else if (remaining) |value| {
-        try metric.writer.print("{d: >3}%", .{@as(u8, @intCast(value))});
-    } else try metric.writer.writeAll(" --%");
-    const tone = if (!use_color) "" else if (failure != null) ansi.red else if (remaining) |value|
-        (if (value <= 5) ansi.red else if (value <= 20) ansi.yellow else ansi.green)
+    const label_text = try std.fmt.allocPrint(allocator, "{s: <5}", .{label});
+    defer allocator.free(label_text);
+    const value_text = if (failure) |value| try std.fmt.allocPrint(allocator, "{s: >5}", .{value}) else if (remaining) |value|
+        try std.fmt.allocPrint(allocator, "{d: >4}%", .{@as(u8, @intCast(value))})
     else
-        ansi.dim;
+        try allocator.dupe(u8, "  --%");
+    defer allocator.free(value_text);
     const reset = if (failure != null) try allocator.dupe(u8, "refresh failed") else if (window) |w| blk: {
         if (w.resets_at) |ts| {
             if (ts <= now) break :blk try allocator.dupe(u8, "window reset");
-            const when = try formatResetTimeAlloc(ts, now);
-            defer allocator.free(when);
-            break :blk try std.fmt.allocPrint(allocator, "reset {s}", .{when});
+            var parts = try resetPartsAlloc(ts, now);
+            defer parts.deinit();
+            break :blk if (parts.same_day) try std.fmt.allocPrint(allocator, "reset {s}", .{parts.time}) else try std.fmt.allocPrint(allocator, "reset {s} {s}", .{ parts.date, parts.time });
         }
         break :blk try allocator.dupe(u8, "reset unknown");
     } else try allocator.dupe(u8, "no usage data");
     defer allocator.free(reset);
-    if (pixel.displayWidth(metric.written()) + 3 + reset.len <= panel.inner()) {
-        try metric.writer.print("   {s}", .{reset});
-        try panel.line(metric.written(), tone);
+    const parts = [_]pixel.Span{
+        .{ .text = label_text, .tone = muted },
+        .{ .text = value_text, .tone = if (use_color) ansi.bold else "" },
+        .{ .text = "  " },
+        .{ .text = filled.written(), .tone = tone },
+        .{ .text = empty.written(), .tone = muted },
+    };
+    if (pixel.displayWidth(label_text) + pixel.displayWidth(value_text) + 2 + count + 3 + reset.len <= panel.inner()) {
+        try panel.columns(&parts, &.{.{ .text = reset, .tone = muted }});
     } else {
-        try panel.line(metric.written(), tone);
-        const reset_line = try std.fmt.allocPrint(allocator, "      {s}", .{reset});
-        defer allocator.free(reset_line);
-        try panel.line(reset_line, "");
+        try panel.spans(&parts);
+        try panel.spans(&.{ .{ .text = "     " }, .{ .text = reset, .tone = muted } });
     }
 }
 
 fn writePixelSubscription(panel: pixel.Panel, snapshot: subscription.Snapshot, now: i64, use_color: bool) !void {
     const allocator = std.heap.page_allocator;
-    var details: std.Io.Writer.Allocating = .init(allocator);
-    defer details.deinit();
-    try details.writer.writeAll("SUB   ");
-    if (snapshot.valid_until) |until| {
-        try writeSubscriptionTime(&details.writer, until);
-        if (until <= now) {
-            try details.writer.writeAll(" / past snapshot");
-        } else {
-            const days = @divTrunc(until - now, 86400);
-            if (days == 0) try details.writer.writeAll(" / <1d left") else try details.writer.print(" / {d}d left", .{days});
-        }
-    } else try details.writer.writeAll("unknown");
+    const muted = if (use_color) ansi.muted else "";
     const is_past = if (snapshot.valid_until) |ts| ts <= now else false;
-    try panel.line(details.written(), if (use_color and is_past) ansi.yellow else "");
+    const status = if (snapshot.valid_until) |until| blk: {
+        if (until <= now) break :blk try allocator.dupe(u8, "Past snapshot");
+        const days = @divTrunc(until - now, 86400);
+        break :blk if (days == 0) try allocator.dupe(u8, "<1d left") else try std.fmt.allocPrint(allocator, "{d}d left", .{days});
+    } else try allocator.dupe(u8, "Unknown");
+    defer allocator.free(status);
+    try panel.columns(&.{.{ .text = "Subscription", .tone = muted }}, &.{.{ .text = status, .tone = if (use_color and is_past) ansi.amber else "" }});
+    var until: std.Io.Writer.Allocating = .init(allocator);
+    defer until.deinit();
+    if (snapshot.valid_until) |ts| try writeSubscriptionTime(&until.writer, ts) else try until.writer.writeAll("unknown");
+    try panel.spans(&.{ .{ .text = "Until    ", .tone = muted }, .{ .text = until.written() } });
     var checked: std.Io.Writer.Allocating = .init(allocator);
     defer checked.deinit();
-    try checked.writer.writeAll("CHECKED  ");
+    try checked.writer.writeAll("Checked  ");
     if (snapshot.checked_at) |ts| try writeSubscriptionTime(&checked.writer, ts) else try checked.writer.writeAll("unknown");
-    try panel.line(checked.written(), if (use_color) ansi.dim else "");
+    try panel.line(checked.written(), muted);
 }
 
 fn writeSubscriptionTime(out: *std.Io.Writer, ts: i64) !void {
@@ -467,41 +481,6 @@ fn remainingPercent(used: f64) i64 {
     if (remaining <= 0.0) return 0;
     if (remaining >= 100.0) return 100;
     return @as(i64, @intFromFloat(remaining));
-}
-
-fn formatResetTimeAlloc(ts: i64, now: i64) ![]u8 {
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(ts, &tm)) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    }
-    var now_tm: c.struct_tm = undefined;
-    if (!localtimeCompat(now, &now_tm)) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    }
-
-    const same_day = tm.tm_year == now_tm.tm_year and tm.tm_mon == now_tm.tm_mon and tm.tm_mday == now_tm.tm_mday;
-    const hour = @as(u32, @intCast(tm.tm_hour));
-    const min = @as(u32, @intCast(tm.tm_min));
-    if (same_day) {
-        return std.fmt.allocPrint(std.heap.page_allocator, "{d:0>2}:{d:0>2}", .{ hour, min });
-    }
-    const day = @as(u32, @intCast(tm.tm_mday));
-    const months = [_][]const u8{
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-    };
-    const month_idx: usize = if (tm.tm_mon < 0) 0 else @min(@as(usize, @intCast(tm.tm_mon)), months.len - 1);
-    return std.fmt.allocPrint(std.heap.page_allocator, "{d:0>2}:{d:0>2} on {d} {s}", .{ hour, min, day, months[month_idx] });
 }
 
 fn printTableBorder(out: *std.Io.Writer, widths: []const usize) !void {
@@ -749,8 +728,8 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "[01] Business") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[02] Free") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "01  Business") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "02  Free") != null);
 }
 
 test "subscription details distinguish future dates from past snapshots and unknown" {
@@ -763,12 +742,12 @@ test "subscription details distinguish future dates from past snapshots and unkn
     try writePixelSubscription(panel, .{ .valid_until = now }, now, false);
     try writePixelSubscription(panel, .{}, now, false);
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "SUB   2030-") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "CHECKED  2030-") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "/ 2d left") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "/ <1d left") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "/ past snapshot") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "SUB   unknown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Until    2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Checked  2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "2d left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "<1d left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Past snapshot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Until    unknown") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "expired") == null);
 }
 
@@ -785,7 +764,7 @@ test "subscription details follow selectable rows in grouped account output" {
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithSubscriptions(&writer, &reg, false, null, &snapshots);
     const output = writer.buffered();
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "SUB  "));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "Until    "));
     try std.testing.expect(std.mem.indexOf(u8, output, "Renewal: unconfirmed") != null);
 }
 
@@ -842,7 +821,7 @@ test "account panels retain identity and fit narrow terminals without color" {
         try writeAccountPanels(&writer, &reg, false, null, &snapshots, width);
         const output = writer.buffered();
         try std.testing.expect(std.mem.indexOf(u8, output, "* ACTIVE") != null);
-        try std.testing.expect(std.mem.indexOf(u8, output, "HMM...?") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "No usage data") != null);
         try std.testing.expect(std.mem.indexOf(u8, output, "2030-") != null);
         try std.testing.expect(std.mem.indexOfScalar(u8, output, 0x1b) == null);
         var lines = std.mem.tokenizeScalar(u8, output, '\n');
@@ -850,7 +829,7 @@ test "account panels retain identity and fit narrow terminals without color" {
     }
 }
 
-test "quota and companion distinguish exhausted unknown failed and reset windows" {
+test "quota and status distinguish exhausted unknown failed and reset windows" {
     const now: i64 = 1000;
     var window = registry.RateLimitWindow{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 60 };
     var usage = registry.RateLimitSnapshot{ .primary = window, .secondary = null, .credits = null, .plan_type = .pro };
@@ -877,8 +856,8 @@ test "quota and companion distinguish exhausted unknown failed and reset windows
     window.used_percent = std.math.nan(f64);
     try std.testing.expectEqual(@as(?i64, null), quotaRemaining(window, null, now));
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "[....................]   0%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[????????????????????]  --%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[????????????????????] 403") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[####################] 100%   window reset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "0%  ..................") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "--%  ??????????????????") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "403  ??????????????????") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "100%  ==================") != null);
 }

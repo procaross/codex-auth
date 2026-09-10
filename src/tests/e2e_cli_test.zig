@@ -39,9 +39,9 @@ test "subscription dates display offline for active and stored accounts without 
         defer gpa.free(result.stdout);
         defer gpa.free(result.stderr);
         try expectSuccess(result);
-        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "SUB   2030-") != null);
-        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "SUB   2031-") != null);
-        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "CHECKED  ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Until    2030-") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Until    2031-") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Checked  ") != null);
         try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Renewal: unconfirmed") != null);
         const unchanged = try tmp.dir.readFileAlloc(gpa, ".codex/auth.json", 1024 * 1024);
         defer gpa.free(unchanged);

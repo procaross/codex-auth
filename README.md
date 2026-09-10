@@ -16,21 +16,25 @@ The CLI inherits your terminal's background; Braille dot shapes depend on its fo
 
 - Wide terminals place the portrait beside the accounts; narrow terminals stack
   it above them. Six embedded resolutions adapt to widths from 24 to 160 columns.
+- Thin rules, aligned metadata, percentage-first quota rows, and restrained teal
+  accents keep the information readable beside the artwork. Warning colors apply
+  to status and filled dots; reset times and secondary details stay muted.
 - `* ACTIVE` identifies the current account. Account numbers, workspace labels,
   quota reset times, and subscription dates stay visible. The status caption
   changes with remaining quota or refresh errors; the portrait is static.
 - Percentages and filled dots show **remaining** quota. Unknown or failed usage
-  uses question marks instead of looking like zero quota.
+  uses question marks instead of looking like zero quota. The fine dotted bars
+  have quarter-cell precision and keep a visible mark for nonzero quota.
 - `NO_COLOR` disables ANSI colors while keeping the illustration. `TERM=dumb`
   gives a plain account list without the portrait or Braille bars. Piped output
-  has no ANSI escapes; its default layout is 128 columns.
+  has no ANSI escapes; its default layout uses up to 128 columns.
 - The original generated portrait and its precomputed text assets are included.
   Regenerate them with `python3 scripts/generate_portrait.py` (Pillow required
   only for asset generation). The CLI needs no Python, image protocol, downloads,
   or additional network requests to display the artwork.
 
-`SUB` shows the subscription's last-known **valid-until** time and remaining full
-days; `CHECKED` shows the subscription's **last-checked** time. Dates use the local
+`Subscription` shows remaining full days, `Until` shows the last-known
+**valid-until** time, and `Checked` shows the subscription's **last-checked** time. Dates use the local
 timezone and include the UTC offset. This also works with `list --skip-api`.
 
 The dates come from `chatgpt_subscription_active_until` and
