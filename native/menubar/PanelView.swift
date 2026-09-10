@@ -20,7 +20,7 @@ struct PanelView: View {
                 Spacer(minLength: 0)
             } else {
                 hero.padding(.horizontal, 22)
-                LiquidGlassTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)
+                SystemTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         if let error = store.error { message(error, warning: true) }
