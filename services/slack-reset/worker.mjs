@@ -162,6 +162,8 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   if (state.last_error || state.slack.last_error) process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// Node resolves the module URL through symlinks, while argv keeps the caller's path.
+const entryFile = process.argv[1] && await fs.realpath(process.argv[1]).catch(() => null);
+if (entryFile && import.meta.url === pathToFileURL(entryFile).href) {
   main().catch(error => { console.error(clean(error.message)); process.exitCode = 1; });
 }

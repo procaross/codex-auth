@@ -82,3 +82,14 @@ test('test message is explicit and contains source link plus UTC+8 time', () => 
   const p = slackMessage(null, now); assert.match(p.text, /测试消息/); assert.match(p.text, /不代表发生了新的重置/);
   assert.equal(p.blocks[2].elements[0].url, 'https://codex-resets.com'); assert.match(p.blocks[3].elements[0].text, /18:00 \(UTC\+8\)/);
 });
+
+test('CLI runs when launched through the deployment current symlink', async t => {
+  const opts = await setup(t);
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { fileURLToPath } = await import('node:url');
+  const link = path.join(opts.dir, 'current-worker.mjs');
+  await fs.symlink(fileURLToPath(new URL('../services/slack-reset/worker.mjs', import.meta.url)), link);
+  const result = await promisify(execFile)(process.execPath, [link, 'status'], { env: { ...process.env, RESET_STATE_DIR: opts.dir } });
+  assert.equal(JSON.parse(result.stdout).initialized, false);
+});
