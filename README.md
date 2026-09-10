@@ -56,6 +56,8 @@ token refresh, or registry migration is needed for this feature.
 
 ### Reset news and system notifications
 
+For notifications when your computer is offline, deploy the [Slack reset bot](services/slack-reset/README.md) on a Linux server. It sends Chinese announcements with the same robot icon, persistent deduplication and retry handling.
+
 ```shell
 codex-auth resets                        # latest, scheduled and forecast information
 codex-auth resets --cached               # offline snapshot
@@ -90,16 +92,38 @@ account's eligibility or personal credit balance.
 - State and notification history live in `CODEX_HOME/reset-news/state.json`.
   Fetches use no account credentials. The monitor does not read authentication
   files, modify the account registry, switch accounts, or consume reset credits.
-- Notifications use macOS `osascript` (Script Editor notifications) or Linux
-  `notify-send`. If the test command succeeds but no banner appears, allow the
-  relevant app in system notification settings and check Focus / Do Not Disturb.
-  OS acceptance of a notification does not prove it was displayed.
+- System notification titles and summaries are **Chinese**. Confirmed feed
+  reports, pending plans, and AI forecasts have distinct wording. Summaries use
+  structured fields; original announcement details and eligibility remain at
+  the source. No translation API or extra credentials are needed. CLI output
+  and the original announcement text in `resets` remain English.
+- macOS uses a dedicated **Codex Auth** notification app with its own cyan robot
+  icon, built with Apple's UserNotifications framework. Click a notification to
+  open the HTTPS announcement source. The first use asks for Codex Auth's own
+  notification permission; Script Editor permission does not carry over.
+  Linux uses `notify-send` with the same Chinese summaries.
+- If no banner appears, allow **Codex Auth** in System Settings > Notifications
+  and check Focus / Do Not Disturb. Native delivery errors are retained for retry;
+  system acceptance does not prove the banner was presented.
 - The job retains the Node executable, `PATH`, and proxy environment from the
   terminal where it was enabled. With the existing wrapper, it keeps using
   `http://127.0.0.1:7890`. Re-run `notify enable` after changing the executable or
   proxy. Native environment proxy support needs Node.js 22.21+ or 24+.
 - `list --skip-api` remains entirely independent of the public feed. Use `resets`
   to view public announcements; `resets check` performs one enabled monitor check.
+
+For a macOS source install, build the notification app using
+`./scripts/build-macos-notifier.sh <directory-containing-codex-auth>` and keep
+`Codex Auth.app` next to the CLI binary. Building it requires Apple's Command
+Line Tools / Swift; the installed app has no compiler or additional runtime
+requirements. The script builds both Apple Silicon and Intel code, packages the
+icon, and applies a local ad-hoc signature. Distribution is not notarized.
+
+The notification icon was generated with the built-in imagegen tool. Its
+[source PNG](docs/assets/notification-icon.png) and
+[design prompt](docs/assets/notification-icon.prompt.md) are included. The native
+bundle identifier is `com.procaross.codex-auth.notifications`; it has no network
+client or account-file access.
 
 For development, run `zig test src/main.zig -lc`, `zig build`, and
 `node --test tests/*.test.mjs`. Reset tests use synthetic API responses, isolated
@@ -110,6 +134,8 @@ this branch with Zig **0.15.1**:
 
 ```shell
 zig build -Doptimize=ReleaseSafe
+# macOS: build the notification app beside zig-out/bin/codex-auth
+./scripts/build-macos-notifier.sh
 ./zig-out/bin/codex-auth list --skip-api
 ```
 

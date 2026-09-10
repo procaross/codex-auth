@@ -186,21 +186,65 @@ export async function refresh(state, { now = Date.now(), fetchImpl = fetch } = {
 
 const resetType = item => item.reset_type === 'banked' ? 'Banked reset credit' : 'Regular usage reset';
 export function notification(event) {
-  const title = event.stage === 'executed' ? `Codex: ${resetType(event.item)} reported`
-    : event.stage === 'scheduled' ? `Codex: ${resetType(event.item)} scheduled`
-    : 'Codex: AI reset forecast (unconfirmed)';
   const item = event.item;
-  const qualifier = event.stage === 'scheduled' ? 'Awaiting execution. ' : event.stage === 'forecast' ? 'Prediction only. ' : '';
-  return { title, body: `${qualifier}${clean(item.text).slice(0, 220)}\n${clean(item.source.url || 'https://codex-resets.com')}` };
+  const banked = item.reset_type === 'banked';
+  let title, body;
+  if (event.stage === 'executed') {
+    title = banked ? '新的备用重置公告' : '新的额度重置公告';
+    body = banked
+      ? '发现备用重置次数发放或补发消息。具体适用范围以公告为准。'
+      : '发现一条新的额度重置消息。具体适用范围以公告为准。';
+  } else if (event.stage === 'scheduled') {
+    title = banked ? '备用重置次数发放计划' : '新的额度重置计划';
+    body = item.scheduled_for
+      ? `预计时间：${notificationTime(item.scheduled_for)}。当前仍在等待执行。`
+      : '执行时间尚未公布，当前仍在等待执行。';
+  } else {
+    title = 'AI 重置预测 · 尚未确认';
+    body = item.reset_chance_percent === null
+      ? '出现新的重置预测，尚无概率估计。这是 AI 预测，请以正式公告为准。'
+      : `预估重置概率为 ${item.reset_chance_percent}%。这是 AI 预测，请以正式公告为准。`;
+  }
+  // Chinese summaries use structured fields. The original wording and detailed
+  // eligibility stay at the source; no machine translation service is called.
+  return { title, body: body + ' 点击查看原文。', url: item.source.url || 'https://codex-resets.com' };
 }
 
-export async function notifyNative(message, platform = process.platform, runner = exec) {
+function notificationTime(value) {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }).format(date);
+}
+
+export function macNotifierExecutable(cliExecutable = process.argv[3]) {
+  if (!cliExecutable || !path.isAbsolute(cliExecutable)) throw new Error('The Codex Auth executable path is unavailable.');
+  return path.join(path.dirname(cliExecutable), 'Codex Auth.app', 'Contents', 'MacOS', 'CodexAuthNotifier');
+}
+
+export async function runMacNotifier(args, runner = exec, executable = macNotifierExecutable()) {
+  let result;
+  try { result = await runner(executable, args, { timeout: 45000 }); }
+  catch (error) {
+    if (error.code === 'ENOENT') throw new Error('The Codex Auth notification app is missing. Run scripts/build-macos-notifier.sh with the CLI binary directory.');
+    let message;
+    try { message = JSON.parse(error.stdout).error; } catch {}
+    throw new Error(clean(message || error.message));
+  }
+  let receipt;
+  try { receipt = JSON.parse(result.stdout); } catch { throw new Error('The Codex Auth notification app returned an invalid receipt.'); }
+  if (receipt.error) throw new Error(clean(receipt.error));
+  return receipt;
+}
+
+export async function notifyNative(message, platform = process.platform, runner = exec, helperExecutable) {
   const title = clean(message.title), body = clean(message.body);
+  let url = '';
+  try { const parsed = new URL(message.url); if (parsed.protocol === 'https:') url = parsed.href; } catch {}
   if (platform === 'darwin') {
     // Arguments, never interpolation into AppleScript or a shell command.
-    await runner('/usr/bin/osascript', ['-e', 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run', title, body], { timeout: 10000 });
+    const receipt = await runMacNotifier(['--send', title, body, url], runner, helperExecutable);
+    if (!receipt.accepted) throw new Error('The system did not accept the notification.');
   } else if (platform === 'linux') {
-    await runner('notify-send', ['--app-name=codex-auth', '--', title, body], { timeout: 10000 });
+    await runner('notify-send', ['--app-name=Codex Auth', '--', title, body], { timeout: 10000 });
   } else throw new Error('System notifications support macOS and Linux (notify-send).');
 }
 
@@ -391,7 +435,13 @@ export async function main(args) {
     if (hasProxy && !(major >= 24 || (major === 22 && minor >= 21))) throw new Error('Reset news via an environment proxy requires Node.js 22.21+ or 24+.');
     const [action, codexHome, executable, cacheMode, format] = args;
     const service = serviceDefinition(codexHome, executable);
+    const helper = process.platform === 'darwin' ? macNotifierExecutable(executable) : undefined;
+    const notify = message => notifyNative(message, process.platform, exec, helper);
     if (action === 'enable' || action === 'disable') {
+      if (action === 'enable' && process.platform === 'darwin') {
+        const receipt = await runMacNotifier(['--authorize'], exec, helper);
+        if (!receipt.authorized) throw new Error('System notification permission was not granted.');
+      }
       await setEnabled(service, action === 'enable');
       console.log(action === 'enable' ? 'Reset notifications enabled. A quiet baseline is saved; new announcements will trigger system notifications. Checks run every 5 minutes while signed in.' : 'Reset notifications disabled.');
     } else if (action === 'status') {
@@ -399,7 +449,7 @@ export async function main(args) {
       const loaded = process.platform === 'darwin' && await serviceLoaded(service);
       console.log(`Reset notifications: ${state.enabled ? 'ON' : 'OFF'}\nBackground service: ${loaded ? 'loaded' : 'not loaded'}\nLast successful check: ${localTime(state.checked_at)}\nNext API check: ${state.next_poll_at ? localTime(state.next_poll_at) : 'not scheduled'}\nLast API error: ${clean(state.last_error) || 'none'}\nLast notification error: ${clean(state.notification_error) || 'none'}`);
     } else if (action === 'test_notification') {
-      await notifyNative({ title: 'Codex Auth · Notification test', body: 'Reset news notifications can reach the system. This is a test, not a new reset.' });
+      await notify({ title: '测试通知 · 已就绪', body: '这是一条测试通知。发现新的重置消息时，我会在这里提醒你。', url: 'https://codex-resets.com' });
       console.log('Test notification submitted. If no banner appears, check system notification permissions and Focus settings.');
     } else if (action === 'check' || action === 'watch') {
       if (action === 'watch') {
@@ -407,7 +457,7 @@ export async function main(args) {
         console.log('Watching public reset news. First check is a quiet baseline. Press Ctrl+C to stop.');
       }
       do {
-        const state = await check(service.dir, { foreground: action === 'watch' });
+        const state = await check(service.dir, { foreground: action === 'watch', notify });
         if (state.last_error || state.notification_error) {
           console.error('Reset news: ' + clean(state.last_error || state.notification_error));
           if (action === 'check') process.exitCode = 1;
