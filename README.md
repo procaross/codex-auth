@@ -1,15 +1,13 @@
 # Codex Auth
 
-![command list](https://github.com/user-attachments/assets/6c13a2d6-f9da-47ea-8ec8-0394fc072d40)
-
 `codex-auth` is a command-line tool for switching Codex accounts.
 
 ## This fork: halftone portrait and subscription dates
 
 This branch is based on upstream **v0.2.10**. `codex-auth list` pairs a detailed
-anime portrait with an uncluttered account dashboard. The illustration uses
-cyan Braille halftone dots: eight dots per character, up to a **128 x 128 dot**
-portrait, rather than a small punctuation face. Quota bars use the same dot style.
+retro space-exploration robot with an uncluttered account dashboard.
+The illustration uses cyan Braille halftone dots: eight dots per character, up to a **128 x 128 dot**
+portrait. Quota bars use the same dot style.
 
 ![Halftone account dashboard with fictional accounts](docs/assets/list-preview.png)
 

@@ -17,7 +17,7 @@ def encode(source: Image.Image, columns: int) -> str:
     # 2x4 dots per character; square dots assume conventional 1:2 terminal cells.
     size = columns * 2
     gray = source.convert("L").resize((size, size), Image.Resampling.LANCZOS)
-    # Keep highlights clean while retaining the hair's fine tonal structure.
+    # Keep highlights clean while retaining the illustration's fine tonal structure.
     gray = gray.point(lambda value: 255 - int(((255 - value) / 255) ** 1.15 * 245))
     bitmap = gray.convert("1", dither=Image.Dither.FLOYDSTEINBERG)
     lines = []
