@@ -106,7 +106,7 @@ struct PanelView: View {
                             .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                     Spacer(minLength: 0)
-                    if account.id == store.activeKey { Text("当前登录").font(.system(size: 9, weight: .medium)).foregroundStyle(Palette.teal) }
+                    accountAction(account)
                 }
                 HStack(alignment: .top, spacing: 20) {
                     quota("5 小时", window: account.fiveHour)
@@ -123,16 +123,6 @@ struct PanelView: View {
                 }.foregroundStyle(.secondary)
             }
             .padding(17).cardSurface()
-            if account.id != store.activeKey {
-                Button { Task { await store.switchSelected() } } label: {
-                    Label("切换到这个账号", systemImage: "arrow.left.arrow.right")
-                        .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).padding(.vertical, 6)
-                }
-                .buttonStyle(.glass).disabled(!store.switchAvailable)
-                .help(store.demo ? "演示模式不会切换真实账号" : "切换登录文件后，请手动重启 Codex。重名账号需先设置唯一别名。")
-                Text("切换后需手动重启 Codex；运行中的 App 不会自动换号。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
             subscriptionCard(account)
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -146,6 +136,26 @@ struct PanelView: View {
         } else {
             emptyState("还没有保存的账号", detail: "先在终端运行 codex-auth login，完成登录后刷新。", icon: "person.crop.circle.badge.plus")
         }
+    }
+
+    private func accountAction(_ account: AccountRecord) -> some View {
+        // Reserve the same header space for status and action so previewing an
+        // inactive account never inserts content or shifts the cards below it.
+        ZStack {
+            if account.id == store.activeKey {
+                Text("当前登录").font(.system(size: 9, weight: .medium)).foregroundStyle(Palette.teal)
+            } else {
+                Button { Task { await store.switchSelected() } } label: {
+                    Label("切换", systemImage: "arrow.left.arrow.right")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.glass).controlSize(.small).disabled(!store.switchAvailable)
+                .accessibilityLabel("切换到 " + account.label)
+                .accessibilityHint("切换后请手动重启 Codex。")
+                .help(store.demo ? "演示模式不会切换真实账号" : "切换登录文件后，请手动重启 Codex。重名账号需先设置唯一别名。")
+            }
+        }
+        .frame(width: 64, height: 28)
     }
 
     private func quota(_ title: String, window: UsageWindow?) -> some View {
