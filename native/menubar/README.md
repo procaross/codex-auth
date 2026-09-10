@@ -7,6 +7,12 @@ with breathing, a moving scan band, and subtle pointer movement. This is a
 native app, not a web view. No image generation or extra image downloads occur
 at runtime.
 
+The quota/news selector uses one moving clear-glass lens over an offset blue
+backing, with a fine prismatic edge. It supports click, drag, and keyboard
+selection, springs into place on release, and expands slightly while pressed.
+Reduce Motion removes the spring and expansion; Reduce Transparency uses an
+opaque selected state.
+
 ## Build and install
 
 Requires Xcode 26+ with its macOS SDK selected, a macOS build of this fork's CLI,

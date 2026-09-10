@@ -20,7 +20,7 @@ struct PanelView: View {
                 Spacer(minLength: 0)
             } else {
                 hero.padding(.horizontal, 22)
-                tabBar.padding(.horizontal, 22).padding(.bottom, 15)
+                LiquidGlassTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         if let error = store.error { message(error, warning: true) }
@@ -84,31 +84,6 @@ struct PanelView: View {
             PixelRobot(running: store.visible && animationEnabled).frame(width: 202, height: 190).padding(.trailing, -11)
         }
         .frame(height: 185).padding(.top, 8)
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabButton("额度", icon: "chart.bar.xaxis", index: 0)
-            tabButton("重置动态", icon: "sparkles", index: 1)
-        }
-        .padding(4).background(.primary.opacity(0.035), in: Capsule())
-        .overlay(Capsule().strokeBorder(.primary.opacity(0.035), lineWidth: 1))
-    }
-
-    private func tabButton(_ title: String, icon: String, index: Int) -> some View {
-        Button { store.tab = index } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(title).font(.system(size: 12, weight: store.tab == index ? .semibold : .medium))
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 8)
-            .foregroundStyle(store.tab == index ? Color.primary : Color.secondary)
-            .background {
-                if store.tab == index { Capsule().fill(.clear).glassEffect(.regular, in: .capsule) }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain).accessibilityAddTraits(store.tab == index ? [.isSelected] : [])
     }
 
     @ViewBuilder private var accountContent: some View {
