@@ -1,8 +1,73 @@
 # Codex Auth
 
-![command list](https://github.com/user-attachments/assets/6c13a2d6-f9da-47ea-8ec8-0394fc072d40)
-
 `codex-auth` is a command-line tool for switching Codex accounts.
+
+## This fork: halftone portrait and subscription dates
+
+This branch is based on upstream **v0.2.10**. `codex-auth list` pairs a detailed
+retro space-exploration robot with an uncluttered account dashboard.
+The illustration uses cyan Braille halftone dots: eight dots per character, up to a **128 x 128 dot**
+portrait. Quota bars use the same dot style.
+
+![Halftone account dashboard with fictional accounts](docs/assets/list-preview.png)
+
+The preview is rendered from captured terminal output with fictional accounts.
+The CLI inherits your terminal's background; Braille dot shapes depend on its font.
+
+- Wide terminals place the portrait beside the accounts; narrow terminals stack
+  it above them. Six embedded resolutions adapt to widths from 24 to 160 columns.
+- Thin rules, aligned metadata, percentage-first quota rows, and restrained teal
+  accents keep the information readable beside the artwork. Warning colors apply
+  to status and filled dots; reset times and secondary details stay muted.
+- The `* ACTIVE` account appears first, retaining its original number so that
+  the numbers still match the switch/remove selectors. Other accounts retain
+  their relative order, and workspace labels remain visible.
+- Quota reset labels show a countdown such as `resets in 2d 4h` or
+  `resets in 35m`, calculated when the command runs. Past reset times show
+  `window reset`; unavailable times remain `reset unknown`.
+- Compact `SUB` and `Checked` rows retain the full local subscription snapshot
+  timestamps and UTC offsets. The status caption changes with remaining quota
+  or refresh errors; the portrait is static.
+- Percentages and filled dots show **remaining** quota. Unknown or failed usage
+  uses question marks instead of looking like zero quota. The fine dotted bars
+  have quarter-cell precision and keep a visible mark for nonzero quota.
+- `NO_COLOR` disables ANSI colors while keeping the illustration. `TERM=dumb`
+  gives a plain account list without the portrait or Braille bars. Piped output
+  has no ANSI escapes; its default layout uses up to 128 columns.
+- The original generated portrait and its precomputed text assets are included.
+  Regenerate them with `python3 scripts/generate_portrait.py` (Pillow required
+  only for asset generation). The CLI needs no Python, image protocol, downloads,
+  or additional network requests to display the artwork.
+
+`SUB` shows remaining full days alongside the last-known
+**valid-until** time, and `Checked` shows the subscription's **last-checked** time. Dates use the local
+timezone and include the UTC offset. This also works with `list --skip-api`.
+
+The dates come from `chatgpt_subscription_active_until` and
+`chatgpt_subscription_last_checked` in each account's saved ID token. They do
+not use the token's `exp` field or usage reset times. No additional API request,
+token refresh, or registry migration is needed for this feature.
+
+- Missing, malformed, or unavailable dates are shown as `unknown`.
+- A date in the past is labeled `past snapshot`, not proof that billing expired.
+- Automatic renewal and the next charge date cannot be determined from these
+  claims. A renewed subscription may require a fresh login to update its snapshot.
+
+The upstream npm package below does **not** include this fork's changes. To build
+this branch with Zig **0.15.1**:
+
+```shell
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/codex-auth list --skip-api
+```
+
+If Zig 0.15.1 cannot link against a recent Xcode SDK, use the installed Command
+Line Tools SDK for that build (this does not change the system Xcode selection):
+
+```shell
+DEVELOPER_DIR=/Library/Developer/CommandLineTools zig build -Dtarget=aarch64-macos.15.0 -Doptimize=ReleaseSafe
+```
+
 
 > [!IMPORTANT]
 > For **Codex CLI** and **Codex App** users, switch accounts, then restart the client for the new account to take effect.

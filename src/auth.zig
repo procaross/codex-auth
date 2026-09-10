@@ -1,5 +1,6 @@
 const std = @import("std");
 const registry = @import("registry.zig");
+const subscription = @import("subscription.zig");
 
 pub const AuthInfo = struct {
     email: ?[]u8,
@@ -10,6 +11,7 @@ pub const AuthInfo = struct {
     last_refresh: ?[]u8,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
+    subscription: subscription.Snapshot = .{},
 
     pub fn deinit(self: *const AuthInfo, allocator: std.mem.Allocator) void {
         if (self.email) |e| allocator.free(e);
@@ -129,9 +131,11 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                             }
 
                                             var plan: ?registry.PlanType = null;
+                                            var subscription_snapshot: subscription.Snapshot = .{};
                                             if (cobj.get("https://api.openai.com/auth")) |auth_obj| {
                                                 switch (auth_obj) {
                                                     .object => |aobj| {
+                                                        subscription_snapshot = subscription.fromClaims(aobj);
                                                         if (aobj.get("chatgpt_account_id")) |ai| {
                                                             switch (ai) {
                                                                 .string => |s| {
@@ -189,6 +193,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 .last_refresh = last_refresh,
                                                 .plan = plan,
                                                 .auth_mode = .chatgpt,
+                                                .subscription = subscription_snapshot,
                                             };
                                             email = null;
                                             token_chatgpt_account_id = null;
