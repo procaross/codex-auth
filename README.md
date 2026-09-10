@@ -4,11 +4,40 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
-## This fork: subscription dates
+## This fork: chibi account cards and subscription dates
 
-This branch is based on upstream **v0.2.10**. `codex-auth list` now shows the
-subscription's last-known **valid-until** time, remaining full days, and the
-subscription's **last-checked** time below each account. Times use the local
+This branch is based on upstream **v0.2.10**. `codex-auth list` displays each
+account as a compact ASCII card with a cat-eared chibi companion and pixel quota
+bars. The percentages and filled pixels show **remaining** quota.
+
+- The companion changes expression: `READY!`, `EASY...`, `NAP TIME`, `HMM...?`,
+  or `UH-OH!`, depending on both quota windows and refresh status.
+- `* ACTIVE` marks the current account. Account numbers keep the same order as
+  the switch/remove selectors, including accounts sharing an email address.
+- Cards wrap to terminal width (24–84 columns), including long emails and CJK
+  names. Redirected output uses 84 columns without ANSI colors; `NO_COLOR` also
+  disables colors in an interactive terminal.
+- Unknown or failed usage uses `?` pixels instead of looking like zero quota.
+
+Example with fictional account data:
+
+```text
++-- [01] * ACTIVE / Pro -----------------------------------------------------------+
+| akira@example.com                                                                |
+|  * /\_/\ *                                                                       |
+|   /_|||_\   READY!                                                               |
+|  (  ^.^  )  seen Now                                                             |
+|    /|_|\                                                                         |
+| 5H    [###################.]  96%   reset 20:57                                  |
+| WEEK  [###################.]  96%   reset 15:57 on 17 Sep                        |
+|                                                                                  |
+| SUB   2026-09-18 15:57 +0800 / 7d left                                           |
+| CHECKED  2026-09-10 15:57 +0800                                                  |
++----------------------------------------------------------------------------------+
+```
+
+`SUB` shows the subscription's last-known **valid-until** time and remaining full
+days; `CHECKED` shows the subscription's **last-checked** time. Dates use the local
 timezone and include the UTC offset. This also works with `list --skip-api`.
 
 The dates come from `chatgpt_subscription_active_until` and

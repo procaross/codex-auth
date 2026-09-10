@@ -5,6 +5,7 @@ const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
 const subscription = @import("subscription.zig");
+const pixel = @import("pixel.zig");
 const c = @cImport({
     @cInclude("time.h");
 });
@@ -13,10 +14,13 @@ const ansi = struct {
     const reset = "\x1b[0m";
     const dim = "\x1b[2m";
     const green = "\x1b[32m";
+    const bold = "\x1b[1m";
+    const red = "\x1b[31m";
+    const yellow = "\x1b[33m";
 };
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty();
+    return std.fs.File.stdout().isTty() and !std.process.hasEnvVarConstant("NO_COLOR");
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
@@ -56,25 +60,6 @@ fn usageOverrideForAccount(
     return overrides[account_idx];
 }
 
-fn usageCellTextAlloc(
-    allocator: std.mem.Allocator,
-    window: ?registry.RateLimitWindow,
-    max_width: usize,
-    usage_override: ?[]const u8,
-) ![]u8 {
-    if (usage_override) |value| return allocator.dupe(u8, value);
-    return formatRateLimitUiAlloc(window, max_width);
-}
-
-fn usageCellFullTextAlloc(
-    allocator: std.mem.Allocator,
-    window: ?registry.RateLimitWindow,
-    usage_override: ?[]const u8,
-) ![]u8 {
-    if (usage_override) |value| return allocator.dupe(u8, value);
-    return formatRateLimitFullAlloc(window);
-}
-
 fn writeAccountsTableWithUsageOverrides(
     out: *std.Io.Writer,
     reg: *registry.Registry,
@@ -102,168 +87,208 @@ fn writeAccountsTableWithSubscriptions(
     usage_overrides: ?[]const ?[]const u8,
     snapshots: ?[]const subscription.Snapshot,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
-    var widths = [_]usize{
-        headers[0].len,
-        headers[1].len,
-        headers[2].len,
-        headers[3].len,
-        headers[4].len,
-    };
+    try writeAccountPanels(out, reg, use_color, usage_overrides, snapshots, terminalWidth());
+}
+
+fn writeAccountPanels(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+    snapshots: ?[]const subscription.Snapshot,
+    terminal_columns: usize,
+) !void {
+    const allocator = std.heap.page_allocator;
+    const width = @max(@as(usize, 24), @min(@as(usize, 84), if (terminal_columns == 0) 84 else terminal_columns));
     const now = std.time.timestamp();
-    var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
-    defer display.deinit(std.heap.page_allocator);
-    const idx_width = @max(@as(usize, 2), indexWidth(display.selectable_row_indices.len));
-    const prefix_len: usize = 2 + idx_width + 1;
-    const sep_len: usize = 2;
-
-    for (display.rows) |row| {
-        const indent: usize = @as(usize, row.depth) * 2;
-        widths[0] = @max(widths[0], row.account_cell.len + indent);
-        if (row.account_index) |account_idx| {
-            const rec = reg.accounts.items[account_idx];
-            const plan = planDisplay(&rec, "-");
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
-            defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
-            defer std.heap.page_allocator.free(rate_week_str);
-            const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
-            defer std.heap.page_allocator.free(last_str);
-
-            widths[1] = @max(widths[1], plan.len);
-            widths[2] = @max(widths[2], rate_5h_str.len);
-            widths[3] = @max(widths[3], rate_week_str.len);
-            widths[4] = @max(widths[4], last_str.len);
-        }
-    }
-
-    adjustListWidths(&widths, prefix_len, sep_len);
-
-    const h0 = try truncateAlloc(headers[0], widths[0]);
-    defer std.heap.page_allocator.free(h0);
-    const h1 = try truncateAlloc(headers[1], widths[1]);
-    defer std.heap.page_allocator.free(h1);
-    const header_5h = if (widths[2] >= "5H USAGE".len) "5H USAGE" else "5H";
-    const h2 = try truncateAlloc(header_5h, widths[2]);
-    defer std.heap.page_allocator.free(h2);
-    const header_week = if (widths[3] >= "WEEKLY USAGE".len) "WEEKLY USAGE" else if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
-    const h3 = try truncateAlloc(header_week, widths[3]);
-    defer std.heap.page_allocator.free(h3);
-    const header_last = if (widths[4] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
-    const h4 = try truncateAlloc(header_last, widths[4]);
-    defer std.heap.page_allocator.free(h4);
-
-    if (use_color) try out.writeAll(ansi.dim);
-    try writeRepeat(out, ' ', prefix_len);
-    try writePadded(out, h0, widths[0]);
-    try out.writeAll("  ");
-    try writePadded(out, h1, widths[1]);
-    try out.writeAll("  ");
-    try writePadded(out, h2, widths[2]);
-    try out.writeAll("  ");
-    try writePadded(out, h3, widths[3]);
-    try out.writeAll("  ");
-    try writePadded(out, h4, widths[4]);
-    try out.writeAll("\n");
-    if (use_color) try out.writeAll(ansi.dim);
-    try writeRepeat(out, '-', listTotalWidth(&widths, prefix_len, sep_len));
-    try out.writeAll("\n");
+    var display = try display_rows.buildDisplayRows(allocator, reg, null);
+    defer display.deinit(allocator);
+    if (use_color) try out.writeAll(ansi.green);
+    try out.writeAll("  + CODEX AUTH +\n");
+    try out.print("  {d} ACCOUNTS | % LEFT\n", .{display.selectable_row_indices.len});
     if (use_color) try out.writeAll(ansi.reset);
+    try out.writeByte('\n');
 
-    var selectable_counter: usize = 0;
-    for (display.rows) |row| {
-        if (row.account_index) |account_idx| {
-            const rec = reg.accounts.items[account_idx];
-            const plan = planDisplay(&rec, "-");
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[2], usage_override);
-            defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[3], usage_override);
-            defer std.heap.page_allocator.free(rate_week_str);
-            const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
-            defer std.heap.page_allocator.free(last);
-            const indent: usize = @as(usize, row.depth) * 2;
-            const indent_to_print: usize = @min(indent, widths[0]);
-            const account_cell = try truncateAlloc(row.account_cell, widths[0] - indent_to_print);
-            defer std.heap.page_allocator.free(account_cell);
-            const plan_cell = try truncateAlloc(plan, widths[1]);
-            defer std.heap.page_allocator.free(plan_cell);
-            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[2]);
-            defer std.heap.page_allocator.free(rate_5h_cell);
-            const rate_week_cell = try truncateAlloc(rate_week_str, widths[3]);
-            defer std.heap.page_allocator.free(rate_week_cell);
-            const last_cell = try truncateAlloc(last, widths[4]);
-            defer std.heap.page_allocator.free(last_cell);
-            if (use_color) {
-                if (row.is_active) {
-                    try out.writeAll(ansi.green);
-                } else {
-                    try out.writeAll(ansi.dim);
-                }
-            }
-            try out.writeAll(if (row.is_active) "* " else "  ");
-            try writeIndexPadded(out, selectable_counter + 1, idx_width);
-            try out.writeAll(" ");
-            try writeRepeat(out, ' ', indent_to_print);
-            try writePadded(out, account_cell, widths[0] - indent_to_print);
-            try out.writeAll("  ");
-            try writePadded(out, plan_cell, widths[1]);
-            try out.writeAll("  ");
-            try writePadded(out, rate_5h_cell, widths[2]);
-            try out.writeAll("  ");
-            try writePadded(out, rate_week_cell, widths[3]);
-            try out.writeAll("  ");
-            try writePadded(out, last_cell, widths[4]);
-            try out.writeAll("\n");
-            if (use_color) try out.writeAll(ansi.reset);
-            if (snapshots) |items| {
-                if (account_idx < items.len) {
-                    if (use_color) try out.writeAll(ansi.dim);
-                    try writeSubscriptionDetails(out, items[account_idx], now, prefix_len + indent_to_print);
-                    if (use_color) try out.writeAll(ansi.reset);
-                }
-            }
-            selectable_counter += 1;
-        } else {
-            const account_cell = try truncateAlloc(row.account_cell, widths[0]);
-            defer std.heap.page_allocator.free(account_cell);
-            if (use_color) try out.writeAll(ansi.dim);
-            try writeRepeat(out, ' ', prefix_len);
-            try writePadded(out, account_cell, widths[0]);
-            try out.writeAll("\n");
-            if (use_color) try out.writeAll(ansi.reset);
-        }
+    if (display.selectable_row_indices.len == 0) {
+        const panel = pixel.Panel{ .out = out, .width = width };
+        try panel.border("START");
+        try panel.line("No saved accounts.", "");
+        try writeMascot(panel, .unknown, "Ready when you are!", use_color);
+        try panel.line("Run: codex-auth login", "");
+        try panel.border("");
+        return;
     }
-    if (snapshots != null and reg.accounts.items.len > 0) {
-        try out.writeAll("\nSubscription dates are saved login snapshots, not confirmed renewal dates.\n");
-        try out.writeAll("Times are local. Past or unknown snapshots may need a fresh login.\n");
+    for (display.selectable_row_indices, 0..) |row_index, number| {
+        const row = display.rows[row_index];
+        const account_idx = row.account_index.?;
+        const rec = &reg.accounts.items[account_idx];
+        const panel = pixel.Panel{
+            .out = out,
+            .width = width,
+            .border_color = if (!use_color) "" else if (row.is_active) ansi.green else ansi.dim,
+        };
+        const title = try std.fmt.allocPrint(allocator, "[{d:0>2}] {s}{s}", .{
+            number + 1, if (row.is_active) "* ACTIVE / " else "", planDisplay(rec, "Unknown"),
+        });
+        defer allocator.free(title);
+        try panel.border(title);
+        try panel.line(rec.email, if (use_color) ansi.bold else "");
+        if (row.depth == 0 and rec.alias.len > 0) try panel.line(rec.alias, "");
+        if (row.depth > 0) try panel.line(row.account_cell, "");
+        const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+        const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
+        defer allocator.free(last);
+        const seen = try std.fmt.allocPrint(allocator, "seen {s}", .{last});
+        defer allocator.free(seen);
+        try writeMascot(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
+        try writePixelQuota(panel, "5H", resolveRateWindow(rec.last_usage, 300, true), usage_override, now, use_color);
+        try writePixelQuota(panel, "WEEK", resolveRateWindow(rec.last_usage, 10080, false), usage_override, now, use_color);
+        if (snapshots) |items| {
+            if (account_idx < items.len) {
+                try panel.line("", "");
+                try writePixelSubscription(panel, items[account_idx], now, use_color);
+            }
+        }
+        try panel.border("");
+        try out.writeByte('\n');
+    }
+    if (snapshots != null) {
+        try out.writeAll("SUB: login snapshot\nRenewal: unconfirmed\nTimes: local\n");
     }
 }
 
-fn writeSubscriptionDetails(out: *std.Io.Writer, snapshot: subscription.Snapshot, now: i64, indent: usize) !void {
-    try writeRepeat(out, ' ', indent);
-    try out.writeAll("Subscription valid until: ");
+const Mood = enum { ready, low, empty, unknown, failed };
+
+fn quotaRemaining(window: ?registry.RateLimitWindow, failure: ?[]const u8, now: i64) ?i64 {
+    if (failure != null) return null;
+    const w = window orelse return null;
+    if (!std.math.isFinite(w.used_percent)) return null;
+    if (w.resets_at) |ts| if (ts <= now) return 100;
+    return remainingPercent(w.used_percent);
+}
+
+fn accountMood(usage: ?registry.RateLimitSnapshot, failure: ?[]const u8, now: i64) Mood {
+    if (failure != null) return .failed;
+    const five = quotaRemaining(resolveRateWindow(usage, 300, true), null, now);
+    const week = quotaRemaining(resolveRateWindow(usage, 10080, false), null, now);
+    const lowest = @min(five orelse 100, week orelse 100);
+    if (lowest <= 5) return .empty;
+    if (lowest <= 20) return .low;
+    if (five == null or week == null) return .unknown;
+    return .ready;
+}
+
+// A tiny cat-eared chibi companion: bangs, expressive eyes, and a sailor collar.
+// ASCII keeps the face aligned even without emoji fonts or terminal colors.
+fn writeMascot(panel: pixel.Panel, mood: Mood, activity: []const u8, use_color: bool) !void {
+    const allocator = std.heap.page_allocator;
+    const eyes: []const u8 = switch (mood) {
+        .ready => "^.^",
+        .low => "-.-",
+        .empty => "u.u",
+        .unknown => "?.?",
+        .failed => ">.<",
+    };
+    const label: []const u8 = switch (mood) {
+        .ready => "READY!",
+        .low => "EASY...",
+        .empty => "NAP TIME",
+        .unknown => "HMM...?",
+        .failed => "UH-OH!",
+    };
+    const tone: []const u8 = if (!use_color) "" else switch (mood) {
+        .ready => ansi.green,
+        .low, .unknown => ansi.yellow,
+        .empty, .failed => ansi.red,
+    };
+    const hair = try std.fmt.allocPrint(allocator, "  /_|||_\\   {s}", .{label});
+    defer allocator.free(hair);
+    const face = try std.fmt.allocPrint(allocator, " (  {s}  )", .{eyes});
+    defer allocator.free(face);
+    try panel.line(if (mood == .ready) " * /\\_/\\ *" else "   /\\_/\\", tone);
+    try panel.line(hair, tone);
+    // Keep narrow terminals readable without splitting the character itself.
+    if (12 + pixel.displayWidth(activity) <= panel.inner()) {
+        const face_line = try std.fmt.allocPrint(allocator, "{s}  {s}", .{ face, activity });
+        defer allocator.free(face_line);
+        try panel.line(face_line, tone);
+    } else {
+        try panel.line(face, tone);
+    }
+    try panel.line("   /|_|\\", tone);
+    if (12 + pixel.displayWidth(activity) > panel.inner()) try panel.line(activity, "");
+}
+
+fn writePixelQuota(
+    panel: pixel.Panel,
+    label: []const u8,
+    window: ?registry.RateLimitWindow,
+    failure: ?[]const u8,
+    now: i64,
+    use_color: bool,
+) !void {
+    const allocator = std.heap.page_allocator;
+    const remaining = quotaRemaining(window, failure, now);
+    const count = @min(@as(usize, 20), panel.inner() - 15);
+    var bars: [20]u8 = undefined;
+    const filled: usize = if (remaining) |value| @intCast(@divTrunc(value * @as(i64, @intCast(count)), 100)) else 0;
+    for (bars[0..count], 0..) |*cell, i| cell.* = if (remaining == null) '?' else if (i < filled or (i == 0 and remaining.? > 0)) '#' else '.';
+    var metric: std.Io.Writer.Allocating = .init(allocator);
+    defer metric.deinit();
+    try metric.writer.print("{s}", .{label});
+    try writeRepeat(&metric.writer, ' ', 6 - label.len);
+    try metric.writer.print("[{s}] ", .{bars[0..count]});
+    if (failure) |value| {
+        try metric.writer.print("{s}", .{value});
+    } else if (remaining) |value| {
+        try metric.writer.print("{d: >3}%", .{@as(u8, @intCast(value))});
+    } else try metric.writer.writeAll(" --%");
+    const tone = if (!use_color) "" else if (failure != null) ansi.red else if (remaining) |value|
+        (if (value <= 5) ansi.red else if (value <= 20) ansi.yellow else ansi.green)
+    else
+        ansi.dim;
+    const reset = if (failure != null) try allocator.dupe(u8, "refresh failed") else if (window) |w| blk: {
+        if (w.resets_at) |ts| {
+            if (ts <= now) break :blk try allocator.dupe(u8, "window reset");
+            const when = try formatResetTimeAlloc(ts, now);
+            defer allocator.free(when);
+            break :blk try std.fmt.allocPrint(allocator, "reset {s}", .{when});
+        }
+        break :blk try allocator.dupe(u8, "reset unknown");
+    } else try allocator.dupe(u8, "no usage data");
+    defer allocator.free(reset);
+    if (metric.written().len + 3 + reset.len <= panel.inner()) {
+        try metric.writer.print("   {s}", .{reset});
+        try panel.line(metric.written(), tone);
+    } else {
+        try panel.line(metric.written(), tone);
+        const reset_line = try std.fmt.allocPrint(allocator, "      {s}", .{reset});
+        defer allocator.free(reset_line);
+        try panel.line(reset_line, "");
+    }
+}
+
+fn writePixelSubscription(panel: pixel.Panel, snapshot: subscription.Snapshot, now: i64, use_color: bool) !void {
+    const allocator = std.heap.page_allocator;
+    var details: std.Io.Writer.Allocating = .init(allocator);
+    defer details.deinit();
+    try details.writer.writeAll("SUB   ");
     if (snapshot.valid_until) |until| {
-        try writeSubscriptionTime(out, until);
+        try writeSubscriptionTime(&details.writer, until);
         if (until <= now) {
-            try out.writeAll(" (past snapshot)");
+            try details.writer.writeAll(" / past snapshot");
         } else {
             const days = @divTrunc(until - now, 86400);
-            if (days == 0) try out.writeAll(" (<1d remaining)") else try out.print(" ({d}d remaining)", .{days});
+            if (days == 0) try details.writer.writeAll(" / <1d left") else try details.writer.print(" / {d}d left", .{days});
         }
-    } else try out.writeAll("unknown");
-    try out.writeAll("\n");
-    if (snapshot.checked_at) |checked| {
-        try writeRepeat(out, ' ', indent);
-        try out.writeAll("Subscription last checked: ");
-        try writeSubscriptionTime(out, checked);
-        try out.writeAll("\n");
-    }
+    } else try details.writer.writeAll("unknown");
+    const is_past = if (snapshot.valid_until) |ts| ts <= now else false;
+    try panel.line(details.written(), if (use_color and is_past) ansi.yellow else "");
+    var checked: std.Io.Writer.Allocating = .init(allocator);
+    defer checked.deinit();
+    try checked.writer.writeAll("CHECKED  ");
+    if (snapshot.checked_at) |ts| try writeSubscriptionTime(&checked.writer, ts) else try checked.writer.writeAll("unknown");
+    try panel.line(checked.written(), if (use_color) ansi.dim else "");
 }
 
 fn writeSubscriptionTime(out: *std.Io.Writer, ts: i64) !void {
@@ -533,67 +558,6 @@ fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     }
 }
 
-fn listTotalWidth(widths: *const [5]usize, prefix_len: usize, sep_len: usize) usize {
-    var sum: usize = prefix_len;
-    for (widths) |w| sum += w;
-    sum += sep_len * (widths.len - 1);
-    return sum;
-}
-
-fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
-    const term_cols = terminalWidth();
-    if (term_cols == 0) return;
-    const total = listTotalWidth(widths, prefix_len, sep_len);
-    if (total <= term_cols) return;
-
-    const min_email: usize = 10;
-    const min_plan: usize = 4;
-    const min_rate: usize = 1;
-    const min_last: usize = 4;
-
-    var over = total - term_cols;
-    if (over == 0) return;
-
-    if (widths[0] > min_email) {
-        const reducible = widths[0] - min_email;
-        const reduce = @min(reducible, over);
-        widths[0] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[1] > min_plan) {
-        const reducible = widths[1] - min_plan;
-        const reduce = @min(reducible, over);
-        widths[1] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[2] > min_rate) {
-        const reducible = widths[2] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[2] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[3] > min_rate) {
-        const reducible = widths[3] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[3] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[4] > min_last) {
-        const reducible = widths[4] - min_last;
-        const reduce = @min(reducible, over);
-        widths[4] -= reduce;
-        over -= reduce;
-    }
-}
-
 fn adjustTableWidths(widths: []usize) void {
     const term_cols = terminalWidth();
     if (term_cols == 0) return;
@@ -686,27 +650,6 @@ fn truncateAlloc(value: []const u8, max_len: usize) ![]u8 {
     return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0 .. max_len - 1]});
 }
 
-fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
-    var buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
-    if (idx_str.len < width) {
-        var pad: usize = width - idx_str.len;
-        while (pad > 0) : (pad -= 1) {
-            try out.writeAll("0");
-        }
-    }
-    try out.writeAll(idx_str);
-}
-
-fn indexWidth(count: usize) usize {
-    var n = count;
-    var width: usize = 1;
-    while (n >= 10) : (n /= 10) {
-        width += 1;
-    }
-    return width;
-}
-
 fn makeTestRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
@@ -787,30 +730,31 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Als's Workspace");
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
 
-    var buffer: [2048]u8 = undefined;
+    var buffer: [8192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[01] Business") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[02] Free") != null);
 }
 
 test "subscription details distinguish future dates from past snapshots and unknown" {
     const now = subscription.parseTimestamp("2030-01-02T12:00:00Z").?;
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeSubscriptionDetails(&writer, .{ .valid_until = now + 2 * 86400, .checked_at = now }, now, 5);
-    try writeSubscriptionDetails(&writer, .{ .valid_until = now + 60 }, now, 5);
-    try writeSubscriptionDetails(&writer, .{ .valid_until = now }, now, 5);
-    try writeSubscriptionDetails(&writer, .{}, now, 5);
+    const panel = pixel.Panel{ .out = &writer, .width = 84 };
+    try writePixelSubscription(panel, .{ .valid_until = now + 2 * 86400, .checked_at = now }, now, false);
+    try writePixelSubscription(panel, .{ .valid_until = now + 60 }, now, false);
+    try writePixelSubscription(panel, .{ .valid_until = now }, now, false);
+    try writePixelSubscription(panel, .{}, now, false);
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription valid until: 2030-") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription last checked: 2030-") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "(2d remaining)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "(<1d remaining)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "(past snapshot)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription valid until: unknown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SUB   2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CHECKED  2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/ 2d left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/ <1d left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/ past snapshot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SUB   unknown") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "expired") == null);
 }
 
@@ -827,8 +771,8 @@ test "subscription details follow selectable rows in grouped account output" {
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithSubscriptions(&writer, &reg, false, null, &snapshots);
     const output = writer.buffered();
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "Subscription valid until:"));
-    try std.testing.expect(std.mem.indexOf(u8, output, "not confirmed renewal dates") != null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "SUB  "));
+    try std.testing.expect(std.mem.indexOf(u8, output, "Renewal: unconfirmed") != null);
 }
 
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
@@ -841,7 +785,7 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
 
     const usage_overrides = [_]?[]const u8{ null, "403" };
 
-    var buffer: [2048]u8 = undefined;
+    var buffer: [8192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
 
@@ -862,11 +806,65 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
         .plan_type = .team,
     };
 
-    var buffer: [2048]u8 = undefined;
+    var buffer: [8192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
+}
+
+test "account panels retain identity and fit narrow terminals without color" {
+    const allocator = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(allocator);
+    try appendTestAccount(allocator, &reg, "user::account", "very-long-account-name-for-wrapping@example.com", "交易账户 cafe\u{301}", .pro);
+    reg.active_account_key = try allocator.dupe(u8, "user::account");
+    const snapshots = [_]subscription.Snapshot{.{ .valid_until = subscription.parseTimestamp("2030-01-02T03:04:05Z") }};
+    for ([_]usize{ 24, 40, 60, 84 }) |width| {
+        var buffer: [8192]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        try writeAccountPanels(&writer, &reg, false, null, &snapshots, width);
+        const output = writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, output, "* ACTIVE") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "HMM...?") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "2030-") != null);
+        try std.testing.expect(std.mem.indexOfScalar(u8, output, 0x1b) == null);
+        var lines = std.mem.tokenizeScalar(u8, output, '\n');
+        while (lines.next()) |line| try std.testing.expect(pixel.displayWidth(line) <= width);
+    }
+}
+
+test "quota and companion distinguish exhausted unknown failed and reset windows" {
+    const now: i64 = 1000;
+    var window = registry.RateLimitWindow{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 60 };
+    var usage = registry.RateLimitSnapshot{ .primary = window, .secondary = null, .credits = null, .plan_type = .pro };
+    try std.testing.expectEqual(Mood.empty, accountMood(usage, null, now));
+    try std.testing.expectEqual(Mood.failed, accountMood(usage, "403", now));
+    try std.testing.expectEqual(Mood.unknown, accountMood(null, null, now));
+    window.used_percent = 85;
+    usage.primary = window;
+    try std.testing.expectEqual(Mood.low, accountMood(usage, null, now));
+    window.used_percent = 4;
+    usage.primary = window;
+    usage.secondary = .{ .used_percent = 4, .window_minutes = 10080, .resets_at = now + 60 };
+    try std.testing.expectEqual(Mood.ready, accountMood(usage, null, now));
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const panel = pixel.Panel{ .out = &writer, .width = 84 };
+    window.used_percent = 100;
+    try writePixelQuota(panel, "5H", window, null, now, false);
+    try writePixelQuota(panel, "5H", null, null, now, false);
+    try writePixelQuota(panel, "5H", window, "403", now, false);
+    window.resets_at = now;
+    try writePixelQuota(panel, "5H", window, null, now, false);
+    window.used_percent = std.math.nan(f64);
+    try std.testing.expectEqual(@as(?i64, null), quotaRemaining(window, null, now));
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "[....................]   0%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[????????????????????]  --%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[????????????????????] 403") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[####################] 100%   window reset") != null);
 }
