@@ -4,37 +4,32 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
-## This fork: chibi account cards and subscription dates
+## This fork: halftone portrait and subscription dates
 
-This branch is based on upstream **v0.2.10**. `codex-auth list` displays each
-account as a compact ASCII card with a cat-eared chibi companion and pixel quota
-bars. The percentages and filled pixels show **remaining** quota.
+This branch is based on upstream **v0.2.10**. `codex-auth list` pairs a detailed
+anime portrait with an uncluttered account dashboard. The illustration uses
+cyan Braille halftone dots: eight dots per character, up to a **128 x 128 dot**
+portrait, rather than a small punctuation face. Quota bars use the same dot style.
 
-- The companion changes expression: `READY!`, `EASY...`, `NAP TIME`, `HMM...?`,
-  or `UH-OH!`, depending on both quota windows and refresh status.
-- `* ACTIVE` marks the current account. Account numbers keep the same order as
-  the switch/remove selectors, including accounts sharing an email address.
-- Cards wrap to terminal width (24–84 columns), including long emails and CJK
-  names. Redirected output uses 84 columns without ANSI colors; `NO_COLOR` also
-  disables colors in an interactive terminal.
-- Unknown or failed usage uses `?` pixels instead of looking like zero quota.
+![Halftone account dashboard with fictional accounts](docs/assets/list-preview.png)
 
-Example with fictional account data:
+The preview is rendered from captured terminal output with fictional accounts.
+The CLI inherits your terminal's background; Braille dot shapes depend on its font.
 
-```text
-+-- [01] * ACTIVE / Pro -----------------------------------------------------------+
-| akira@example.com                                                                |
-|  * /\_/\ *                                                                       |
-|   /_|||_\   READY!                                                               |
-|  (  ^.^  )  seen Now                                                             |
-|    /|_|\                                                                         |
-| 5H    [###################.]  96%   reset 20:57                                  |
-| WEEK  [###################.]  96%   reset 15:57 on 17 Sep                        |
-|                                                                                  |
-| SUB   2026-09-18 15:57 +0800 / 7d left                                           |
-| CHECKED  2026-09-10 15:57 +0800                                                  |
-+----------------------------------------------------------------------------------+
-```
+- Wide terminals place the portrait beside the accounts; narrow terminals stack
+  it above them. Six embedded resolutions adapt to widths from 24 to 160 columns.
+- `* ACTIVE` identifies the current account. Account numbers, workspace labels,
+  quota reset times, and subscription dates stay visible. The status caption
+  changes with remaining quota or refresh errors; the portrait is static.
+- Percentages and filled dots show **remaining** quota. Unknown or failed usage
+  uses question marks instead of looking like zero quota.
+- `NO_COLOR` disables ANSI colors while keeping the illustration. `TERM=dumb`
+  gives a plain account list without the portrait or Braille bars. Piped output
+  has no ANSI escapes; its default layout is 128 columns.
+- The original generated portrait and its precomputed text assets are included.
+  Regenerate them with `python3 scripts/generate_portrait.py` (Pillow required
+  only for asset generation). The CLI needs no Python, image protocol, downloads,
+  or additional network requests to display the artwork.
 
 `SUB` shows the subscription's last-known **valid-until** time and remaining full
 days; `CHECKED` shows the subscription's **last-checked** time. Dates use the local

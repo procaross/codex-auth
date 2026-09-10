@@ -5,12 +5,18 @@ pub const Panel = struct {
     out: *std.Io.Writer,
     width: usize,
     border_color: []const u8 = "",
+    framed: bool = true,
+    dotted: bool = false,
 
     pub fn inner(self: Panel) usize {
-        return self.width - 4;
+        return if (self.framed) self.width - 4 else self.width;
     }
 
     pub fn border(self: Panel, title: []const u8) !void {
+        if (!self.framed) {
+            if (title.len > 0) try self.line(title, self.border_color);
+            return;
+        }
         try self.color(self.border_color);
         try self.out.writeByte('+');
         const room = self.width - 2;
@@ -47,16 +53,20 @@ pub const Panel = struct {
                 if (last_space) |space| end = space;
             }
             const fragment = std.mem.trimEnd(u8, remaining[0..end], " ");
-            try self.color(self.border_color);
-            try self.out.writeAll("| ");
-            try self.reset(self.border_color);
+            if (self.framed) {
+                try self.color(self.border_color);
+                try self.out.writeAll("| ");
+                try self.reset(self.border_color);
+            }
             try self.color(tone);
             try self.out.writeAll(fragment);
             try self.reset(tone);
             try repeat(self.out, ' ', self.inner() - displayWidth(fragment));
-            try self.color(self.border_color);
-            try self.out.writeAll(" |");
-            try self.reset(self.border_color);
+            if (self.framed) {
+                try self.color(self.border_color);
+                try self.out.writeAll(" |");
+                try self.reset(self.border_color);
+            }
             try self.out.writeByte('\n');
             if (end == remaining.len) break;
             remaining = std.mem.trimStart(u8, remaining[end..], " ");

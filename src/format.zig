@@ -6,6 +6,7 @@ const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
 const subscription = @import("subscription.zig");
 const pixel = @import("pixel.zig");
+const portrait = @import("portrait.zig");
 const c = @cImport({
     @cInclude("time.h");
 });
@@ -15,12 +16,20 @@ const ansi = struct {
     const dim = "\x1b[2m";
     const green = "\x1b[32m";
     const bold = "\x1b[1m";
+    const teal = "\x1b[38;2;8;131;153m";
     const red = "\x1b[31m";
     const yellow = "\x1b[33m";
 };
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty() and !std.process.hasEnvVarConstant("NO_COLOR");
+    return std.fs.File.stdout().isTty() and !std.process.hasEnvVarConstant("NO_COLOR") and !plainTerminal();
+}
+
+fn plainTerminal() bool {
+    const allocator = std.heap.page_allocator;
+    const term = std.process.getEnvVarOwned(allocator, "TERM") catch return false;
+    defer allocator.free(term);
+    return std.mem.eql(u8, term, "dumb");
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
@@ -87,7 +96,9 @@ fn writeAccountsTableWithSubscriptions(
     usage_overrides: ?[]const ?[]const u8,
     snapshots: ?[]const subscription.Snapshot,
 ) !void {
-    try writeAccountPanels(out, reg, use_color, usage_overrides, snapshots, terminalWidth());
+    if (plainTerminal()) {
+        try writeAccountDetails(out, reg, false, usage_overrides, snapshots, 80, false);
+    } else try writeAccountPanels(out, reg, use_color, usage_overrides, snapshots, terminalWidth());
 }
 
 fn writeAccountPanels(
@@ -99,21 +110,37 @@ fn writeAccountPanels(
     terminal_columns: usize,
 ) !void {
     const allocator = std.heap.page_allocator;
-    const width = @max(@as(usize, 24), @min(@as(usize, 84), if (terminal_columns == 0) 84 else terminal_columns));
+    const width = @max(@as(usize, 24), @min(@as(usize, 160), if (terminal_columns == 0) 128 else terminal_columns));
+    var information: std.Io.Writer.Allocating = .init(allocator);
+    defer information.deinit();
+    try writeAccountDetails(&information.writer, reg, use_color, usage_overrides, snapshots, portrait.Layout.forWidth(width).infoWidth(width), true);
+    try portrait.write(out, information.written(), width, use_color);
+}
+
+fn writeAccountDetails(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+    snapshots: ?[]const subscription.Snapshot,
+    width: usize,
+    dotted: bool,
+) !void {
+    const allocator = std.heap.page_allocator;
     const now = std.time.timestamp();
     var display = try display_rows.buildDisplayRows(allocator, reg, null);
     defer display.deinit(allocator);
-    if (use_color) try out.writeAll(ansi.green);
-    try out.writeAll("  + CODEX AUTH +\n");
-    try out.print("  {d} ACCOUNTS | % LEFT\n", .{display.selectable_row_indices.len});
+    if (use_color) try out.writeAll(ansi.teal);
+    try out.writeAll("CODEX AUTH\n");
+    try out.print("{d} ACCOUNTS / QUOTA LEFT\n", .{display.selectable_row_indices.len});
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeByte('\n');
 
     if (display.selectable_row_indices.len == 0) {
-        const panel = pixel.Panel{ .out = out, .width = width };
+        const panel = pixel.Panel{ .out = out, .width = width, .framed = false };
         try panel.border("START");
         try panel.line("No saved accounts.", "");
-        try writeMascot(panel, .unknown, "Ready when you are!", use_color);
+        try panel.line("Ready when you are!", "");
         try panel.line("Run: codex-auth login", "");
         try panel.border("");
         return;
@@ -125,7 +152,9 @@ fn writeAccountPanels(
         const panel = pixel.Panel{
             .out = out,
             .width = width,
-            .border_color = if (!use_color) "" else if (row.is_active) ansi.green else ansi.dim,
+            .border_color = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.bold,
+            .framed = false,
+            .dotted = dotted,
         };
         const title = try std.fmt.allocPrint(allocator, "[{d:0>2}] {s}{s}", .{
             number + 1, if (row.is_active) "* ACTIVE / " else "", planDisplay(rec, "Unknown"),
@@ -140,7 +169,7 @@ fn writeAccountPanels(
         defer allocator.free(last);
         const seen = try std.fmt.allocPrint(allocator, "seen {s}", .{last});
         defer allocator.free(seen);
-        try writeMascot(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
+        try writeAccountStatus(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
         try writePixelQuota(panel, "5H", resolveRateWindow(rec.last_usage, 300, true), usage_override, now, use_color);
         try writePixelQuota(panel, "WEEK", resolveRateWindow(rec.last_usage, 10080, false), usage_override, now, use_color);
         if (snapshots) |items| {
@@ -178,17 +207,8 @@ fn accountMood(usage: ?registry.RateLimitSnapshot, failure: ?[]const u8, now: i6
     return .ready;
 }
 
-// A tiny cat-eared chibi companion: bangs, expressive eyes, and a sailor collar.
-// ASCII keeps the face aligned even without emoji fonts or terminal colors.
-fn writeMascot(panel: pixel.Panel, mood: Mood, activity: []const u8, use_color: bool) !void {
+fn writeAccountStatus(panel: pixel.Panel, mood: Mood, activity: []const u8, use_color: bool) !void {
     const allocator = std.heap.page_allocator;
-    const eyes: []const u8 = switch (mood) {
-        .ready => "^.^",
-        .low => "-.-",
-        .empty => "u.u",
-        .unknown => "?.?",
-        .failed => ">.<",
-    };
     const label: []const u8 = switch (mood) {
         .ready => "READY!",
         .low => "EASY...",
@@ -201,22 +221,10 @@ fn writeMascot(panel: pixel.Panel, mood: Mood, activity: []const u8, use_color: 
         .low, .unknown => ansi.yellow,
         .empty, .failed => ansi.red,
     };
-    const hair = try std.fmt.allocPrint(allocator, "  /_|||_\\   {s}", .{label});
-    defer allocator.free(hair);
-    const face = try std.fmt.allocPrint(allocator, " (  {s}  )", .{eyes});
-    defer allocator.free(face);
-    try panel.line(if (mood == .ready) " * /\\_/\\ *" else "   /\\_/\\", tone);
-    try panel.line(hair, tone);
-    // Keep narrow terminals readable without splitting the character itself.
-    if (12 + pixel.displayWidth(activity) <= panel.inner()) {
-        const face_line = try std.fmt.allocPrint(allocator, "{s}  {s}", .{ face, activity });
-        defer allocator.free(face_line);
-        try panel.line(face_line, tone);
-    } else {
-        try panel.line(face, tone);
-    }
-    try panel.line("   /|_|\\", tone);
-    if (12 + pixel.displayWidth(activity) > panel.inner()) try panel.line(activity, "");
+    const status = try std.fmt.allocPrint(allocator, "{s} / {s}", .{ label, activity });
+    defer allocator.free(status);
+    try panel.line(status, tone);
+    try panel.line("", "");
 }
 
 fn writePixelQuota(
@@ -237,7 +245,13 @@ fn writePixelQuota(
     defer metric.deinit();
     try metric.writer.print("{s}", .{label});
     try writeRepeat(&metric.writer, ' ', 6 - label.len);
-    try metric.writer.print("[{s}] ", .{bars[0..count]});
+    try metric.writer.writeByte('[');
+    for (bars[0..count]) |cell| {
+        if (panel.dotted and cell != '?') {
+            try metric.writer.writeAll(if (cell == '#') "⣿" else "⣀");
+        } else try metric.writer.writeByte(cell);
+    }
+    try metric.writer.writeAll("] ");
     if (failure) |value| {
         try metric.writer.print("{s}", .{value});
     } else if (remaining) |value| {
@@ -257,7 +271,7 @@ fn writePixelQuota(
         break :blk try allocator.dupe(u8, "reset unknown");
     } else try allocator.dupe(u8, "no usage data");
     defer allocator.free(reset);
-    if (metric.written().len + 3 + reset.len <= panel.inner()) {
+    if (pixel.displayWidth(metric.written()) + 3 + reset.len <= panel.inner()) {
         try metric.writer.print("   {s}", .{reset});
         try panel.line(metric.written(), tone);
     } else {
@@ -730,7 +744,7 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Als's Workspace");
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
 
-    var buffer: [8192]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTable(&writer, &reg, false);
 
@@ -741,7 +755,7 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
 
 test "subscription details distinguish future dates from past snapshots and unknown" {
     const now = subscription.parseTimestamp("2030-01-02T12:00:00Z").?;
-    var buffer: [4096]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     const panel = pixel.Panel{ .out = &writer, .width = 84 };
     try writePixelSubscription(panel, .{ .valid_until = now + 2 * 86400, .checked_at = now }, now, false);
@@ -767,7 +781,7 @@ test "subscription details follow selectable rows in grouped account output" {
     const snapshots = [_]subscription.Snapshot{
         .{ .valid_until = subscription.parseTimestamp("2030-01-02T03:04:05Z") }, .{},
     };
-    var buffer: [4096]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithSubscriptions(&writer, &reg, false, null, &snapshots);
     const output = writer.buffered();
@@ -785,7 +799,7 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
 
     const usage_overrides = [_]?[]const u8{ null, "403" };
 
-    var buffer: [8192]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
 
@@ -806,7 +820,7 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
         .plan_type = .team,
     };
 
-    var buffer: [8192]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTable(&writer, &reg, false);
 
@@ -822,8 +836,8 @@ test "account panels retain identity and fit narrow terminals without color" {
     try appendTestAccount(allocator, &reg, "user::account", "very-long-account-name-for-wrapping@example.com", "交易账户 cafe\u{301}", .pro);
     reg.active_account_key = try allocator.dupe(u8, "user::account");
     const snapshots = [_]subscription.Snapshot{.{ .valid_until = subscription.parseTimestamp("2030-01-02T03:04:05Z") }};
-    for ([_]usize{ 24, 40, 60, 84 }) |width| {
-        var buffer: [8192]u8 = undefined;
+    for ([_]usize{ 24, 40, 60, 84, 100, 128, 160 }) |width| {
+        var buffer: [16384]u8 = undefined;
         var writer: std.Io.Writer = .fixed(&buffer);
         try writeAccountPanels(&writer, &reg, false, null, &snapshots, width);
         const output = writer.buffered();
@@ -851,7 +865,7 @@ test "quota and companion distinguish exhausted unknown failed and reset windows
     usage.secondary = .{ .used_percent = 4, .window_minutes = 10080, .resets_at = now + 60 };
     try std.testing.expectEqual(Mood.ready, accountMood(usage, null, now));
 
-    var buffer: [4096]u8 = undefined;
+    var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     const panel = pixel.Panel{ .out = &writer, .width = 84 };
     window.used_percent = 100;
