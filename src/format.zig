@@ -151,43 +151,46 @@ fn writeAccountDetails(
         try panel.border("");
         return;
     }
-    for (display.selectable_row_indices, 0..) |row_index, number| {
-        const row = display.rows[row_index];
-        const account_idx = row.account_index.?;
-        const rec = &reg.accounts.items[account_idx];
-        const panel = pixel.Panel{
-            .out = out,
-            .width = width,
-            .border_color = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.bold,
-            .framed = false,
-            .dotted = dotted,
-        };
-        const number_text = try std.fmt.allocPrint(allocator, "{d:0>2}  ", .{number + 1});
-        defer allocator.free(number_text);
-        try panel.columns(&.{
-            .{ .text = number_text, .tone = if (use_color) ansi.muted else "" },
-            .{ .text = planDisplay(rec, "Unknown"), .tone = if (use_color) ansi.bold else "" },
-        }, &.{.{ .text = if (row.is_active) "* ACTIVE" else "SAVED", .tone = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.muted }});
-        try panel.line(rec.email, if (use_color and row.is_active) ansi.bold else "");
-        if (row.depth == 0 and rec.alias.len > 0) try panel.line(rec.alias, "");
-        if (row.depth > 0) try panel.line(row.account_cell, "");
-        const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-        const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
-        defer allocator.free(last);
-        const seen = try std.fmt.allocPrint(allocator, "Updated {s}", .{last});
-        defer allocator.free(seen);
-        try writeAccountStatus(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
-        try writePixelQuota(panel, "5H", resolveRateWindow(rec.last_usage, 300, true), usage_override, now, use_color);
-        try writePixelQuota(panel, "WEEK", resolveRateWindow(rec.last_usage, 10080, false), usage_override, now, use_color);
-        if (snapshots) |items| {
-            if (account_idx < items.len) {
-                try panel.line("", "");
-                try writePixelSubscription(panel, items[account_idx], now, use_color);
+    // Keep the original selectable ordinal used by switch/remove, even when pinned.
+    for ([_]bool{ true, false }) |active_first| {
+        for (display.selectable_row_indices, 0..) |row_index, number| {
+            const row = display.rows[row_index];
+            if (row.is_active != active_first) continue;
+            const account_idx = row.account_index.?;
+            const rec = &reg.accounts.items[account_idx];
+            const panel = pixel.Panel{
+                .out = out,
+                .width = width,
+                .border_color = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.bold,
+                .framed = false,
+                .dotted = dotted,
+            };
+            const number_text = try std.fmt.allocPrint(allocator, "{d:0>2}  ", .{number + 1});
+            defer allocator.free(number_text);
+            try panel.columns(&.{
+                .{ .text = number_text, .tone = if (use_color) ansi.muted else "" },
+                .{ .text = planDisplay(rec, "Unknown"), .tone = if (use_color) ansi.bold else "" },
+            }, &.{.{ .text = if (row.is_active) "* ACTIVE" else "SAVED", .tone = if (!use_color) "" else if (row.is_active) ansi.teal else ansi.muted }});
+            try panel.line(rec.email, if (use_color and row.is_active) ansi.bold else "");
+            if (row.depth == 0 and rec.alias.len > 0) try panel.line(rec.alias, "");
+            if (row.depth > 0) try panel.line(row.account_cell, "");
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
+            defer allocator.free(last);
+            const seen = try std.fmt.allocPrint(allocator, "Updated {s}", .{last});
+            defer allocator.free(seen);
+            try writeAccountStatus(panel, accountMood(rec.last_usage, usage_override, now), seen, use_color);
+            try writePixelQuota(panel, "5H", resolveRateWindow(rec.last_usage, 300, true), usage_override, now, use_color);
+            try writePixelQuota(panel, "WEEK", resolveRateWindow(rec.last_usage, 10080, false), usage_override, now, use_color);
+            if (snapshots) |items| {
+                if (account_idx < items.len) {
+                    try panel.line("", "");
+                    try writePixelSubscription(panel, items[account_idx], now, use_color);
+                }
             }
+            try panel.rule(if (use_color) ansi.rule else "");
+            try panel.line("", "");
         }
-        try panel.line("", "");
-        try panel.rule(if (use_color) ansi.rule else "");
-        try panel.line("", "");
     }
     if (snapshots != null) {
         try heading.line("Subscription dates are login snapshots.", if (use_color) ansi.muted else "");
@@ -235,7 +238,6 @@ fn writeAccountStatus(panel: pixel.Panel, mood: Mood, activity: []const u8, use_
         .failed => "Refresh failed",
     };
     try panel.columns(&.{.{ .text = label, .tone = statusTone(mood, use_color) }}, &.{.{ .text = activity, .tone = if (use_color) ansi.muted else "" }});
-    try panel.line("", "");
 }
 
 fn writePixelQuota(
@@ -274,10 +276,7 @@ fn writePixelQuota(
     defer allocator.free(value_text);
     const reset = if (failure != null) try allocator.dupe(u8, "refresh failed") else if (window) |w| blk: {
         if (w.resets_at) |ts| {
-            if (ts <= now) break :blk try allocator.dupe(u8, "window reset");
-            var parts = try resetPartsAlloc(ts, now);
-            defer parts.deinit();
-            break :blk if (parts.same_day) try std.fmt.allocPrint(allocator, "reset {s}", .{parts.time}) else try std.fmt.allocPrint(allocator, "reset {s} {s}", .{ parts.date, parts.time });
+            break :blk try resetCountdownAlloc(ts, now);
         }
         break :blk try allocator.dupe(u8, "reset unknown");
     } else try allocator.dupe(u8, "no usage data");
@@ -297,6 +296,26 @@ fn writePixelQuota(
     }
 }
 
+/// Relative reset labels do not depend on the local timezone or calendar day.
+fn resetCountdownAlloc(reset_at: i64, now: i64) ![]u8 {
+    const allocator = std.heap.page_allocator;
+    if (reset_at <= now) return allocator.dupe(u8, "window reset");
+    const seconds: u64 = @intCast(@as(i128, reset_at) - @as(i128, now));
+    if (seconds < 60) return allocator.dupe(u8, "resets in <1m");
+    const days = seconds / 86400;
+    const hours = (seconds / 3600) % 24;
+    const minutes = (seconds / 60) % 60;
+    if (days > 0) {
+        if (hours == 0) return std.fmt.allocPrint(allocator, "resets in {d}d", .{days});
+        return std.fmt.allocPrint(allocator, "resets in {d}d {d}h", .{ days, hours });
+    }
+    if (hours > 0) {
+        if (minutes == 0) return std.fmt.allocPrint(allocator, "resets in {d}h", .{hours});
+        return std.fmt.allocPrint(allocator, "resets in {d}h {d}m", .{ hours, minutes });
+    }
+    return std.fmt.allocPrint(allocator, "resets in {d}m", .{minutes});
+}
+
 fn writePixelSubscription(panel: pixel.Panel, snapshot: subscription.Snapshot, now: i64, use_color: bool) !void {
     const allocator = std.heap.page_allocator;
     const muted = if (use_color) ansi.muted else "";
@@ -307,11 +326,13 @@ fn writePixelSubscription(panel: pixel.Panel, snapshot: subscription.Snapshot, n
         break :blk if (days == 0) try allocator.dupe(u8, "<1d left") else try std.fmt.allocPrint(allocator, "{d}d left", .{days});
     } else try allocator.dupe(u8, "Unknown");
     defer allocator.free(status);
-    try panel.columns(&.{.{ .text = "Subscription", .tone = muted }}, &.{.{ .text = status, .tone = if (use_color and is_past) ansi.amber else "" }});
     var until: std.Io.Writer.Allocating = .init(allocator);
     defer until.deinit();
     if (snapshot.valid_until) |ts| try writeSubscriptionTime(&until.writer, ts) else try until.writer.writeAll("unknown");
-    try panel.spans(&.{ .{ .text = "Until    ", .tone = muted }, .{ .text = until.written() } });
+    try panel.columns(&.{
+        .{ .text = "SUB      ", .tone = muted },
+        .{ .text = until.written() },
+    }, &.{.{ .text = status, .tone = if (use_color and is_past) ansi.amber else "" }});
     var checked: std.Io.Writer.Allocating = .init(allocator);
     defer checked.deinit();
     try checked.writer.writeAll("Checked  ");
@@ -714,14 +735,16 @@ test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed v
     try std.testing.expectEqualStrings("100%", formatted);
 }
 
-test "writeAccountsTable shows zero-padded row numbers for selectable accounts" {
+test "active account is first without changing switch and remove row numbers" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "a@example.com", "", .team);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Als's Workspace");
-    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "b@example.com", "", .free);
+
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-2");
 
     var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
@@ -729,7 +752,15 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "01  Business") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "02  Free") != null);
+    const saved_pos = std.mem.indexOf(u8, output, "01  Business").?;
+    const active_pos = std.mem.indexOf(u8, output, "02  Free").?;
+    try std.testing.expect(active_pos < saved_pos);
+    try std.testing.expect(std.mem.indexOf(u8, output[active_pos..saved_pos], "* ACTIVE") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "02  Free"));
+    var selectable = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer selectable.deinit(gpa);
+    try std.testing.expectEqual(@as(?usize, 0), selectable.rows[selectable.selectable_row_indices[0]].account_index);
+    try std.testing.expectEqual(@as(?usize, 1), selectable.rows[selectable.selectable_row_indices[1]].account_index);
 }
 
 test "subscription details distinguish future dates from past snapshots and unknown" {
@@ -742,12 +773,12 @@ test "subscription details distinguish future dates from past snapshots and unkn
     try writePixelSubscription(panel, .{ .valid_until = now }, now, false);
     try writePixelSubscription(panel, .{}, now, false);
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Until    2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SUB      2030-") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Checked  2030-") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "2d left") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "<1d left") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Past snapshot") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Until    unknown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SUB      unknown") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "expired") == null);
 }
 
@@ -760,12 +791,22 @@ test "subscription details follow selectable rows in grouped account output" {
     const snapshots = [_]subscription.Snapshot{
         .{ .valid_until = subscription.parseTimestamp("2030-01-02T03:04:05Z") }, .{},
     };
+    reg.active_account_key = try allocator.dupe(u8, "user-1::acc-2");
+    const overrides = [_]?[]const u8{ null, "403" };
     var buffer: [16384]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeAccountsTableWithSubscriptions(&writer, &reg, false, null, &snapshots);
+    try writeAccountsTableWithSubscriptions(&writer, &reg, false, &overrides, &snapshots);
     const output = writer.buffered();
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "Until    "));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "SUB      "));
     try std.testing.expect(std.mem.indexOf(u8, output, "Renewal: unconfirmed") != null);
+    const saved_pos = std.mem.indexOf(u8, output, "02  Pro").?;
+    const active_pos = std.mem.indexOf(u8, output, "01  Free").?;
+    const active_card = output[active_pos..saved_pos];
+    try std.testing.expect(std.mem.indexOf(u8, active_card, "SUB      unknown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_card, "403") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_card, "2030-") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output[saved_pos..], "SUB      2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output[saved_pos..], "403") == null);
 }
 
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
@@ -860,4 +901,26 @@ test "quota and status distinguish exhausted unknown failed and reset windows" {
     try std.testing.expect(std.mem.indexOf(u8, output, "--%  ??????????????????") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "403  ??????????????????") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "100%  ==================") != null);
+}
+
+test "reset countdown handles expired subminute hour and day boundaries" {
+    const now: i64 = 1000;
+    const cases = .{
+        .{ @as(i64, -1), "window reset" },
+        .{ @as(i64, 0), "window reset" },
+        .{ @as(i64, 1), "resets in <1m" },
+        .{ @as(i64, 59), "resets in <1m" },
+        .{ @as(i64, 60), "resets in 1m" },
+        .{ @as(i64, 3599), "resets in 59m" },
+        .{ @as(i64, 3600), "resets in 1h" },
+        .{ @as(i64, 3660), "resets in 1h 1m" },
+        .{ @as(i64, 86399), "resets in 23h 59m" },
+        .{ @as(i64, 86400), "resets in 1d" },
+        .{ @as(i64, 2 * 86400 + 4 * 3600), "resets in 2d 4h" },
+    };
+    inline for (cases) |case| {
+        const label = try resetCountdownAlloc(now + case[0], now);
+        defer std.heap.page_allocator.free(label);
+        try std.testing.expectEqualStrings(case[1], label);
+    }
 }

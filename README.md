@@ -19,9 +19,15 @@ The CLI inherits your terminal's background; Braille dot shapes depend on its fo
 - Thin rules, aligned metadata, percentage-first quota rows, and restrained teal
   accents keep the information readable beside the artwork. Warning colors apply
   to status and filled dots; reset times and secondary details stay muted.
-- `* ACTIVE` identifies the current account. Account numbers, workspace labels,
-  quota reset times, and subscription dates stay visible. The status caption
-  changes with remaining quota or refresh errors; the portrait is static.
+- The `* ACTIVE` account appears first, retaining its original number so that
+  the numbers still match the switch/remove selectors. Other accounts retain
+  their relative order, and workspace labels remain visible.
+- Quota reset labels show a countdown such as `resets in 2d 4h` or
+  `resets in 35m`, calculated when the command runs. Past reset times show
+  `window reset`; unavailable times remain `reset unknown`.
+- Compact `SUB` and `Checked` rows retain the full local subscription snapshot
+  timestamps and UTC offsets. The status caption changes with remaining quota
+  or refresh errors; the portrait is static.
 - Percentages and filled dots show **remaining** quota. Unknown or failed usage
   uses question marks instead of looking like zero quota. The fine dotted bars
   have quarter-cell precision and keep a visible mark for nonzero quota.
@@ -33,7 +39,7 @@ The CLI inherits your terminal's background; Braille dot shapes depend on its fo
   only for asset generation). The CLI needs no Python, image protocol, downloads,
   or additional network requests to display the artwork.
 
-`Subscription` shows remaining full days, `Until` shows the last-known
+`SUB` shows remaining full days alongside the last-known
 **valid-until** time, and `Checked` shows the subscription's **last-checked** time. Dates use the local
 timezone and include the UTC offset. This also works with `list --skip-api`.
 
