@@ -59,7 +59,7 @@ notification helper's `com.procaross.codex-auth.notifications`.
   dates, and JWT `exp` is never used. Dates use the local timezone and an
   unambiguous `yyyy-MM-dd HH:mm` format. Hover the information icon for the
   subscription's last-checked timestamp and explanation.
-- Selecting a row only previews that account. The separate switch button calls
+- Selecting a row only previews that account. The card-header switch button calls
   `codex-auth switch <query>` with a uniquely resolving email or alias, then
   verifies the resulting identity. Ambiguous queries are disabled and stdin is
   closed to prevent accidental interactive selection. API-key entries are
