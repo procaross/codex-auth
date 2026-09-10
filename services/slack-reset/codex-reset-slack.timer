@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Codex reset feed and retry Slack deliveries
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

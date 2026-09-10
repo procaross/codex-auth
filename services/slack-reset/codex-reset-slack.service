@@ -1,0 +1,33 @@
+[Unit]
+Description=Codex reset news to Slack
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/codex-reset-slack/webhook
+
+[Service]
+Type=oneshot
+User=codex-reset-slack
+Group=codex-reset-slack
+WorkingDirectory=/opt/codex-reset-slack/current
+Environment=TZ=Asia/Shanghai
+Environment=RESET_STATE_DIR=/var/lib/codex-reset-slack
+Environment=SLACK_WEBHOOK_FILE=/etc/codex-reset-slack/webhook
+EnvironmentFile=/etc/codex-reset-slack/service.env
+ExecStart=/usr/local/bin/node services/slack-reset/worker.mjs check
+StateDirectory=codex-reset-slack
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=110
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=192M
+TasksMax=32

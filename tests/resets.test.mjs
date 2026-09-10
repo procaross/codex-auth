@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { emptyState, validateStatus, events, refresh, deliver, readState, writeState, check, withLock, serviceDefinition, notifyNative, render, retryDelay, POLL_MS, ENDPOINT } from '../src/resets.mjs';
+import { emptyState, validateStatus, events, refresh, deliver, readState, writeState, check, withLock, serviceDefinition, notifyNative, render, retryDelay, POLL_MS, ENDPOINT, notification, macNotifierExecutable, runMacNotifier } from '../src/resets.mjs';
 
 const now = Date.parse('2026-09-10T10:00:00Z');
 const reset = (id = 'post-1', type = 'regular') => ({ id, reset_type: type, announced_at: '2026-09-09T18:00:00Z', text: 'A reset was reported.', source: { type: 'x_post', author: 'thsottiaux', url: 'https://x.com/thsottiaux/status/1' } });
@@ -93,18 +93,18 @@ test('planned -> executed for the same post notifies as distinct stages', async 
   s.status.data.scheduled_reset = { ...reset('same-post', 'banked'), status: 'scheduled', scheduled_for: '2026-09-09T10:00:00Z' };
   const notices = [];
   await deliver(s, { now, notify: async message => notices.push(message) });
-  assert.match(notices[0].title, /scheduled/); assert.match(notices[0].body, /Awaiting execution/);
+  assert.match(notices[0].title, /发放计划/); assert.match(notices[0].body, /等待执行/);
   assert.equal(events(s.status, now)[0].stage, 'scheduled');
   s.status.data.scheduled_reset = null; s.status.data.latest_reset = reset('same-post', 'banked');
   await deliver(s, { now, notify: async message => notices.push(message) });
-  assert.equal(notices.length, 2); assert.match(notices[1].title, /Banked reset credit reported/);
+  assert.equal(notices.length, 2); assert.match(notices[1].title, /备用重置公告/);
 });
 
 test('forecasts are explicit, expire quietly and do not notify on every percentage edit', async () => {
   const s = fresh(); await deliver(s, { now }); const notices = [];
   s.status.data.active_watch = forecast();
   await deliver(s, { now, notify: async m => notices.push(m) });
-  assert.match(notices[0].title, /AI reset forecast \(unconfirmed\)/);
+  assert.match(notices[0].title, /AI 重置预测.*尚未确认/);
   s.status.data.active_watch.reset_chance_percent = 50;
   await deliver(s, { now, notify: async m => notices.push(m) }); assert.equal(notices.length, 1);
   s.status.data.active_watch.level = 'strong';
@@ -120,7 +120,7 @@ test('failed notification is retried without repeating an earlier successful del
   await assert.rejects(deliver(s, { now, notify: async () => { if (++attempts === 2) throw Error('notification denied'); }, save: () => writeState(dir, s) }), /denied/);
   const resumed = await readState(dir); const notices = [];
   await deliver(resumed, { now, notify: async m => notices.push(m) });
-  assert.equal(notices.length, 1); assert.match(notices[0].title, /forecast/);
+  assert.equal(notices.length, 1); assert.match(notices[0].title, /预测/);
 });
 
 test('parallel foreground and background checks send each announcement only once', async t => {
@@ -148,13 +148,14 @@ test('corrupt state is not overwritten and dead-process locks can recover', asyn
   assert.equal(await withLock(dir, async () => 42), 42);
 });
 
-test('notification text is passed as data to native tools, never executed as code', async () => {
-  const calls = [], message = { title: '" & do shell script "bad', body: '$(touch /tmp/never)\n\x1b[31m data' };
-  await notifyNative(message, 'darwin', async (...args) => calls.push(args));
-  assert.equal(calls[0][0], '/usr/bin/osascript');
-  assert.equal(calls[0][1].length, 4); assert.equal(calls[0][1][2], message.title);
-  assert.ok(!calls[0][1][1].includes('bad')); assert.ok(!calls[0][1][3].includes('\x1b'));
-  await notifyNative(message, 'linux', async (...args) => calls.push(args));
+test('notification text is passed as data to the branded app, never executed as code', async () => {
+  const calls = [], message = { title: '" & do shell script "bad', body: '$(touch /tmp/never)\n\x1b[31m data', url: 'javascript:alert(1)' };
+  const runner = async (...args) => { calls.push(args); return { stdout: '{"accepted":true}' }; };
+  await notifyNative(message, 'darwin', runner, '/tmp/Codex Auth.app/Contents/MacOS/CodexAuthNotifier');
+  assert.equal(calls[0][0], '/tmp/Codex Auth.app/Contents/MacOS/CodexAuthNotifier');
+  assert.equal(calls[0][1].length, 4); assert.equal(calls[0][1][0], '--send');
+  assert.equal(calls[0][1][1], message.title); assert.ok(!calls[0][1][2].includes('\x1b')); assert.equal(calls[0][1][3], '');
+  await notifyNative(message, 'linux', runner);
   assert.equal(calls[1][1][1], '--');
 });
 
@@ -218,4 +219,27 @@ test('oversized streamed bodies and huge invalid Retry-After values remain bound
   assert.match(s.last_error, /large/);
   assert.ok(Number.isFinite(retryDelay('9'.repeat(400), now, 1)));
   assert.ok(retryDelay('9007199254740991', now, 1) + now <= Number.MAX_SAFE_INTEGER);
+});
+
+test('all system notification stages use Chinese summaries with a separate source URL', () => {
+  for (const type of ['regular', 'banked']) {
+    for (const stage of ['executed', 'scheduled']) {
+      const item = { ...reset('sample', type), scheduled_for: null, text: 'English source text must stay at the source.' };
+      const message = notification({ stage, item });
+      assert.match(message.title, /重置/); assert.match(message.body, /点击查看原文/);
+      assert.ok(!message.body.includes(item.text)); assert.equal(message.url, item.source.url);
+      if (stage === 'scheduled') assert.match(message.body, /尚未公布.*等待执行/);
+    }
+  }
+  const watch = forecast(); watch.reset_chance_percent = null;
+  const message = notification({ stage: 'forecast', item: watch });
+  assert.match(message.body, /尚无概率估计/); assert.match(message.title, /尚未确认/);
+});
+
+test('helper paths and receipts report permission failures instead of pretending delivery succeeded', async () => {
+  assert.equal(macNotifierExecutable('/tmp/my bin/codex-auth'), '/tmp/my bin/Codex Auth.app/Contents/MacOS/CodexAuthNotifier');
+  await assert.rejects(runMacNotifier(['--status'], async () => { throw Object.assign(Error('ENOENT'), { code: 'ENOENT' }); }, '/tmp/missing'), /notification app is missing/);
+  await assert.rejects(runMacNotifier(['--send'], async () => { throw Object.assign(Error('failed'), { stdout: '{"error":"Permission denied"}' }); }, '/tmp/helper'), /Permission denied/);
+  await assert.rejects(runMacNotifier(['--send'], async () => ({ stdout: 'garbled' }), '/tmp/helper'), /invalid receipt/);
+  await assert.rejects(notifyNative({ title: '测试', body: '正文' }, 'darwin', async () => ({ stdout: '{"accepted":false}' }), '/tmp/helper'), /did not accept/);
 });
