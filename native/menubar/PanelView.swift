@@ -16,8 +16,10 @@ struct PanelView: View {
         VStack(spacing: 0) {
             toolbar.padding(.horizontal, 22).padding(.top, 18)
             if store.settings {
-                preferences.padding(22)
-                Spacer(minLength: 0)
+                ScrollView {
+                    preferences.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollIndicators(.hidden)
             } else {
                 hero.padding(.horizontal, 22)
                 SystemTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)

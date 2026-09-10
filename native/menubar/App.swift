@@ -37,18 +37,25 @@ final class CompanionPanel: NSPanel {
         panel.level = demo ? .normal : .popUpMenu
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // The native glass supplies the edge treatment. A window-server shadow
+        // can outline the rectangular backing surface outside its rounded glass.
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.delegate = self
         panel.title = "Codex Auth"
+        let cornerRadius: CGFloat = 26
         let view = PanelView(store: store, close: { [weak self] in self?.closePanel() }, quit: { NSApp.terminate(nil) })
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         let hosting = NSHostingView(rootView: view)
+        // The menu panel, not each page's ideal size, owns the window geometry.
+        hosting.sizingOptions = []
         let glass = NSGlassEffectView(frame: panel.contentView!.bounds)
         glass.style = .regular
-        glass.cornerRadius = 26
+        glass.cornerRadius = cornerRadius
+        glass.clipsToBounds = true
         glass.contentView = hosting
         hosting.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
