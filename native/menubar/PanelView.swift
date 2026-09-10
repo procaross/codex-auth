@@ -19,7 +19,6 @@ struct PanelView: View {
                 ScrollView {
                     preferences.padding(22).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .scrollIndicators(.hidden)
             } else {
                 hero.padding(.horizontal, 22)
                 SystemTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)
@@ -31,7 +30,6 @@ struct PanelView: View {
                     }
                     .padding(.horizontal, 22).padding(.bottom, 18)
                 }
-                .scrollIndicators(.hidden)
             }
             footer
         }
@@ -59,54 +57,45 @@ struct PanelView: View {
             Button { withAnimation(.easeInOut(duration: 0.18)) { store.settings.toggle() } } label: {
                 Image(systemName: store.settings ? "xmark" : "slider.horizontal.3").frame(width: 14, height: 14)
             }
-            .help(store.settings ? "返回仪表盘" : "设置").accessibilityLabel("设置")
+            .help(store.settings ? "返回" : "设置").accessibilityLabel(store.settings ? "返回" : "设置")
         }
         .buttonStyle(.glass).controlSize(.small).tint(nil as Color?)
     }
 
     private var hero: some View {
         HStack(alignment: .center, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 5) {
-                    Circle().fill(store.busy ? Palette.coral : Palette.teal).frame(width: 5, height: 5)
-                    Text(store.busy ? "SYNCING" : "YOUR LITTLE CO-PILOT")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
-                }
-                Text(store.tab == 0 ? "灵感在线。" : "保持好消息。")
-                    .font(.system(size: 25, weight: .semibold)).tracking(-0.7)
-                Text(store.tab == 0 ? "额度与账号，一眼就好。" : "重置动态，随时瞄一眼。")
+            VStack(alignment: .leading, spacing: 8) {
+                Text(store.tab == 0 ? "账号管理" : "重置动态")
+                    .font(.system(size: 21, weight: .semibold))
+                Text(store.tab == 0 ? "已保存 \(store.accounts.count) 个账号" : "来自 Codex Resets")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkle").font(.system(size: 8))
-                    Text("HALFTONE COMPANION").font(.system(size: 7, weight: .medium, design: .monospaced)).tracking(0.9)
-                }
-                .foregroundStyle(Palette.teal).padding(.top, 6)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            PixelRobot(running: store.visible && animationEnabled).frame(width: 202, height: 190).padding(.trailing, -11)
+            PixelRobot(running: store.visible && animationEnabled).frame(width: 168, height: 140)
         }
-        .frame(height: 185).padding(.top, 8)
+        .frame(height: 140).padding(.vertical, 4)
     }
 
     @ViewBuilder private var accountContent: some View {
         if let account = store.selected {
-            VStack(alignment: .leading, spacing: 17) {
-                HStack(alignment: .center, spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12).fill(Palette.teal.opacity(0.09)).frame(width: 38, height: 38)
-                        Text(String(account.label.prefix(1)).uppercased()).font(.system(size: 18, weight: .medium, design: .rounded)).foregroundStyle(Palette.teal)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text(account.label).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                            Text(account.planLabel).font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.teal)
-                                .padding(.horizontal, 6).padding(.vertical, 3).background(Palette.teal.opacity(0.08), in: Capsule())
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(account.label).font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(account.email)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 8) {
+                        Text(account.planLabel).font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.teal)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Palette.teal.opacity(0.08), in: Capsule()).fixedSize()
+                        if !account.alias.isEmpty {
+                            Text(account.email).font(.system(size: 10)).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle).help(account.email)
+                        } else if let name = account.accountName, !name.isEmpty {
+                            Text(name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                         }
-                        Text(account.alias.isEmpty ? (account.accountName ?? "个人账号") : account.email)
-                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        accountAction(account)
                     }
-                    Spacer(minLength: 0)
-                    accountAction(account)
                 }
                 HStack(alignment: .top, spacing: 20) {
                     quota("5 小时", window: account.fiveHour)
@@ -115,7 +104,8 @@ struct PanelView: View {
                 }
                 HStack {
                     Image(systemName: "clock").font(.system(size: 9))
-                    Text("额度快照 · " + DisplayTime.relative(account.updatedAt)).font(.system(size: 10))
+                    Text(DisplayTime.relative(account.updatedAt)).font(.system(size: 10))
+                        .help("额度更新时间：" + DisplayTime.full(account.updatedAt))
                     Spacer()
                     if min(account.fiveHour?.remaining ?? 100, account.weekly?.remaining ?? 100) <= 10 {
                         Text("额度偏低").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.coral)
@@ -126,9 +116,9 @@ struct PanelView: View {
             subscriptionCard(account)
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("我的账号").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    Text("账号列表").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     Spacer()
-                    Text(String(format: "%02d", store.accounts.count)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                    Text("点选查看").font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(.horizontal, 2)
                 VStack(spacing: 2) { ForEach(store.orderedAccounts) { item in accountRow(item) } }
             }
@@ -166,11 +156,11 @@ struct PanelView: View {
                     .font(.system(size: 35, weight: .medium, design: .rounded)).monospacedDigit().tracking(-1.4)
                 if window != nil { Text("%").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary) }
             }
-            .foregroundStyle((window?.remaining ?? 100) <= 10 ? Palette.coral : Color.primary)
+            .foregroundStyle(window == nil ? Color.secondary : ((window?.remaining ?? 100) <= 10 ? Palette.coral : Color.primary))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title + (window.map { "剩余 \(Int($0.remaining))%" } ?? "暂无数据"))
             DotMeter(remaining: window?.remaining)
-            Text(window == nil ? "暂无数据" : DisplayTime.reset(window?.resetDate))
+            Text(window == nil ? "未提供此项数据" : DisplayTime.reset(window?.resetDate))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,16 +173,16 @@ struct PanelView: View {
             Image(systemName: "calendar").font(.system(size: 15, weight: .light)).foregroundStyle(Palette.teal)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text("订阅快照").font(.system(size: 11, weight: .medium))
-                    if let days, days >= 0 { Text("记录剩余 \(days) 天").font(.system(size: 10)).foregroundStyle(days <= 3 ? Palette.coral : .secondary) }
-                    else if days != nil { Text("旧快照，待更新").font(.system(size: 10)).foregroundStyle(Palette.coral) }
+                    Text("订阅记录").font(.system(size: 11, weight: .medium))
+                    if let days, days >= 0 { Text("剩余 \(days) 天").font(.system(size: 10)).foregroundStyle(days <= 3 ? Palette.coral : .secondary) }
+                    else if days != nil { Text("记录已过期").font(.system(size: 10)).foregroundStyle(Palette.coral) }
                 }
-                Text(snapshot?.until == nil ? "登录快照中未提供日期" : "截至 " + DisplayTime.full(snapshot?.until))
+                Text(snapshot?.until == nil ? "未提供有效期" : "记录有效至 " + DisplayTime.full(snapshot?.until))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             Image(systemName: "info.circle").font(.system(size: 11)).foregroundStyle(.tertiary)
-                .help("来自已保存的登录信息，不是账单续费日期。时间为本地时间。\n上次核验：" + DisplayTime.full(snapshot?.checked))
+                .help("登录时保存的有效期，并非账单续费日期。时间为本地时间。\n上次核验：" + DisplayTime.full(snapshot?.checked))
         }
         .padding(13).cardSurface()
     }
@@ -206,7 +196,8 @@ struct PanelView: View {
                     if let name = account.accountName, !name.isEmpty { Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 4)
-                Text(account.planLabel).font(.system(size: 9)).foregroundStyle(.secondary)
+                Text(account.id == store.activeKey ? "当前登录" : account.planLabel)
+                    .font(.system(size: 9)).foregroundStyle(account.id == store.activeKey ? Palette.teal : .secondary)
                 Image(systemName: account.id == store.selectedKey ? "checkmark.circle.fill" : "chevron.right")
                     .font(.system(size: account.id == store.selectedKey ? 12 : 9)).foregroundStyle(account.id == store.selectedKey ? Palette.teal : Color.secondary.opacity(0.5))
             }
@@ -215,18 +206,20 @@ struct PanelView: View {
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain).accessibilityLabel("查看 " + account.label)
+        .accessibilityValue(account.id == store.activeKey ? "当前登录" : "已保存")
+        .help(account.email + (account.id == store.activeKey ? "\n当前登录账号" : "\n点击查看额度，切换需使用卡片内的按钮。"))
         .accessibilityAddTraits(account.id == store.selectedKey ? [.isSelected] : [])
     }
 
     @ViewBuilder private var newsContent: some View {
         HStack {
-            Text("公共重置公告").font(.system(size: 11, weight: .semibold))
+            Text("公共消息").font(.system(size: 11, weight: .semibold))
             Spacer()
             Text(store.newsStale ? "缓存 · " + DisplayTime.relative(store.newsChecked) : DisplayTime.relative(store.newsChecked))
                 .font(.system(size: 10)).foregroundStyle(.secondary)
         }
         if store.news.isEmpty {
-            emptyState(store.newsChecked == nil ? "等待第一条消息" : "暂无重置动态", detail: "点右上角刷新，读取最新的公共重置公告。", icon: "sparkles")
+            emptyState(store.newsChecked == nil ? "尚未加载" : "暂无重置动态", detail: "点击右上角刷新。", icon: "arrow.counterclockwise")
         } else {
             ForEach(store.news) { item in
                 VStack(alignment: .leading, spacing: 12) {
@@ -241,14 +234,14 @@ struct PanelView: View {
                     Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     if let url = item.url {
                         Link(destination: url) {
-                            HStack(spacing: 4) { Text("查看原公告"); Image(systemName: "arrow.up.right") }.font(.system(size: 10, weight: .medium))
+                            HStack(spacing: 4) { Text("查看来源"); Image(systemName: "arrow.up.right") }.font(.system(size: 10, weight: .medium))
                         }.buttonStyle(.plain).foregroundStyle(Palette.teal)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(16).cardSurface()
             }
         }
-        Text("公共公告不代表你的账号拥有重置次数。具体资格与余额以 Codex 为准。")
+        Text("个人可用重置次数请在 Codex 中查看。")
             .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         Link(destination: URL(string: "https://codex-resets.com")!) {
             Label("消息来源 · Codex Resets", systemImage: "arrow.up.right.square").font(.system(size: 10))
@@ -257,11 +250,13 @@ struct PanelView: View {
 
     private var preferences: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("按你的节奏。").font(.system(size: 25, weight: .semibold)).padding(.top, 15)
+            Text("设置").font(.system(size: 21, weight: .semibold)).padding(.top, 8)
             VStack(alignment: .leading, spacing: 18) {
-                Toggle(isOn: $animationEnabled) { preferenceLabel("像素动画", detail: "呼吸、扫描与轻微悬停响应") }
+                Toggle(isOn: $animationEnabled) { preferenceLabel("像素动画", detail: "关闭后显示静态图像") }
+                    .accessibilityLabel("像素动画").accessibilityHint("关闭后显示静态图像")
                 Divider()
                 Toggle(isOn: $proxyEnabled) { preferenceLabel("使用本地代理", detail: "127.0.0.1:7890 · 下次刷新生效") }.disabled(store.busy)
+                    .accessibilityLabel("使用本地代理").accessibilityHint("127.0.0.1:7890，下次刷新生效")
                 Divider()
                 Toggle(isOn: Binding(get: { loginEnabled }, set: { enabled in
                     guard !store.demo else { return }
@@ -270,12 +265,13 @@ struct PanelView: View {
                         loginEnabled = SMAppService.mainApp.status == .enabled
                         if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
                     } catch { store.error = "登录启动设置未完成，请在系统设置中检查登录项。" }
-                })) { preferenceLabel("登录时启动", detail: "只显示菜单栏图标，不弹出面板") }.disabled(store.demo)
+                })) { preferenceLabel("登录时启动", detail: "启动后显示在菜单栏") }.disabled(store.demo)
+                    .accessibilityLabel("登录时启动").accessibilityHint("启动后显示在菜单栏")
             }
             .toggleStyle(.switch).controlSize(.small).padding(17).cardSurface()
-            Text("面板收起后，动画和网络轮询会暂停。系统的“减少动态效果”和“降低透明度”设置同样有效。")
+            Text("收起面板后暂停动画和自动刷新。遵循系统的“减少动态效果”和“降低透明度”设置。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("账号来自本机 Codex 登录文件。切换账号后，请手动重启 Codex。这里不会领取或消耗重置次数。")
+            Text("切换账号后需手动重启 Codex。重置动态仅供查看，不会领取或消耗重置次数。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error = store.error { message(error, warning: true) }
             Link(destination: URL(string: "https://github.com/procaross/codex-auth")!) {
@@ -294,9 +290,9 @@ struct PanelView: View {
 
     private var footer: some View {
         HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 1).fill(Palette.teal.opacity(0.65)).frame(width: 4, height: 4)
-            Text(store.demo ? "演示数据 · 不连接真实账号" : "本机账号 · " + (proxyEnabled ? "代理 7890" : "直接连接"))
-                .font(.system(size: 9)).foregroundStyle(.secondary)
+            Image(systemName: "info.circle").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(store.demo ? "演示数据" : "切换账号后需重启 Codex")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
             Spacer()
             Button("收起", action: close).font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(.secondary).keyboardShortcut(.escape, modifiers: [])
         }

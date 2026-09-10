@@ -32,7 +32,7 @@ final class CompanionPanel: NSPanel {
         store.onChange = { [weak self] in self?.updateStatus() }
         updateStatus()
         let screen = statusItem.button?.window?.screen ?? NSScreen.main
-        let height = min(758, (screen?.visibleFrame.height ?? 850) - 24)
+        let height = min(704, (screen?.visibleFrame.height ?? 850) - 24)
         panel = CompanionPanel(contentRect: NSRect(x: 0, y: 0, width: 438, height: height), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = demo ? .normal : .popUpMenu
         panel.isOpaque = false
@@ -96,7 +96,7 @@ final class CompanionPanel: NSPanel {
         let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
         let screen = window.screen ?? NSScreen.main!
         let frame = screen.visibleFrame
-        let height = min(758, frame.height - 24)
+        let height = min(704, frame.height - 24)
         let x = min(max(frame.minX + 10, anchor.midX - 219), frame.maxX - 448)
         let y = max(frame.minY + 12, anchor.minY - height - 7)
         panel.setFrame(NSRect(x: x, y: y, width: 438, height: height), display: true)
