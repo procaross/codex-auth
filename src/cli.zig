@@ -35,6 +35,12 @@ pub const ListOptions = struct {
     debug: bool = false,
     api_mode: ApiMode = .default,
 };
+pub const ResetAction = enum { show, check, watch, enable, disable, status, test_notification };
+pub const ResetOptions = struct {
+    action: ResetAction = .show,
+    cached: bool = false,
+    json: bool = false,
+};
 pub const LoginOptions = struct {
     device_auth: bool = false,
 };
@@ -78,6 +84,7 @@ pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
 pub const HelpTopic = enum {
     top_level,
+    resets,
     list,
     status,
     login,
@@ -90,6 +97,7 @@ pub const HelpTopic = enum {
 };
 
 pub const Command = union(enum) {
+    resets: ResetOptions,
     list: ListOptions,
     login: LoginOptions,
     import_auth: ImportOptions,
@@ -139,6 +147,34 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             });
         }
         return .{ .command = .{ .version = {} } };
+    }
+
+    if (std.mem.eql(u8, cmd, "resets")) {
+        if (args.len == 3 and isHelpFlag(args[2])) return .{ .command = .{ .help = .resets } };
+        var opts: ResetOptions = .{};
+        if (args.len == 3 and std.mem.eql(u8, args[2], "check")) {
+            opts.action = .check;
+        } else if (args.len == 3 and std.mem.eql(u8, args[2], "watch")) {
+            opts.action = .watch;
+        } else if (args.len == 4 and std.mem.eql(u8, args[2], "notify")) {
+            const actions = .{ "enable", "disable", "status", "test" };
+            const values = [_]ResetAction{ .enable, .disable, .status, .test_notification };
+            inline for (actions, values) |name, value| {
+                if (std.mem.eql(u8, args[3], name)) return .{ .command = .{ .resets = .{ .action = value } } };
+            }
+            return usageErrorResult(allocator, .resets, "unknown notification action `{s}`.", .{args[3]});
+        } else {
+            for (args[2..]) |arg| {
+                if (std.mem.eql(u8, arg, "--cached") and !opts.cached) {
+                    opts.cached = true;
+                } else if (std.mem.eql(u8, arg, "--json") and !opts.json) {
+                    opts.json = true;
+                } else {
+                    return usageErrorResult(allocator, .resets, "unexpected or duplicate argument `{s}` for `resets`.", .{arg});
+                }
+            }
+        }
+        return .{ .command = .{ .resets = opts } };
     }
 
     if (std.mem.eql(u8, cmd, "list")) {
@@ -561,6 +597,7 @@ fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !Pars
 }
 
 fn helpTopicForName(name: []const u8) ?HelpTopic {
+    if (std.mem.eql(u8, name, "resets")) return .resets;
     if (std.mem.eql(u8, name, "list")) return .list;
     if (std.mem.eql(u8, name, "status")) return .status;
     if (std.mem.eql(u8, name, "login")) return .login;
@@ -641,6 +678,7 @@ pub fn writeHelp(
         .{ .name = "remove [<query>|--all]", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
+        .{ .name = "resets", .description = "View reset news and manage system notifications" },
     };
     const import_details = [_]HelpEntry{
         .{ .name = "<path>", .description = "Import one file or batch import a directory" },
@@ -680,6 +718,8 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[2].name, config_details[2].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[3].name, config_details[3].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[4].name, config_details[4].description);
+
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[9].name, commands[9].description);
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);
@@ -774,6 +814,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .clean => "clean",
         .config => "config",
         .daemon => "daemon",
+        .resets => "resets",
     };
 }
 
@@ -789,12 +830,13 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
+        .resets => "Public reset news from codex-resets.com. Predictions are not confirmed resets.",
     };
 }
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .import_auth, .switch_account, .remove_account, .config, .daemon, .resets => true,
         else => false,
     };
 }
@@ -807,6 +849,15 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
+        .resets => try out.writeAll(
+            "  codex-auth resets [--cached] [--json]\n" ++
+                "  codex-auth resets watch\n" ++
+                "  codex-auth resets check\n" ++
+                "  codex-auth resets notify <enable|disable|status|test>\n" ++
+                "\n  Background notifications: macOS. Foreground watch: macOS/Linux.\n" ++
+                "  First check establishes a quiet baseline. New announcements notify once.\n" ++
+                "  Public news does not confirm your account's reset-credit balance.\n",
+        ),
         .list => try out.writeAll("  codex-auth list [--debug] [--api|--skip-api]\n"),
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
@@ -846,6 +897,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
 fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
     try out.writeAll("Examples:\n");
     switch (topic) {
+        .resets => try out.writeAll("  codex-auth resets\n  codex-auth resets notify enable\n  codex-auth resets notify status\n  codex-auth resets notify test\n  codex-auth resets notify disable\n"),
         .top_level => {
             try out.writeAll("  codex-auth list\n");
             try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
@@ -916,6 +968,7 @@ fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .clean => "codex-auth clean --help",
         .config => "codex-auth config --help",
         .daemon => "codex-auth daemon --help",
+        .resets => "codex-auth resets --help",
     };
 }
 
