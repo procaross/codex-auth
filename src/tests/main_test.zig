@@ -1432,3 +1432,9 @@ test "Scenario: Given newer registry schema when loading help config then defaul
     try std.testing.expectEqual(registry.defaultAutoSwitchConfig(), help_cfg.auto_switch);
     try std.testing.expectEqual(registry.defaultApiConfig(), help_cfg.api);
 }
+
+test "reset news never reconciles the account auto-switch service" {
+    for (std.enums.values(@import("../cli.zig").ResetAction)) |action| {
+        try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .resets = .{ .action = action } }));
+    }
+}

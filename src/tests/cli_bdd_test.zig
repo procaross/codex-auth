@@ -988,3 +988,28 @@ test "Scenario: Given selector environment when deciding remove UI then non-tty 
     try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true));
     try std.testing.expect(cli.shouldUseNumberedRemoveSelector(true, true));
 }
+
+test "reset news commands parse independent display and notification actions" {
+    const allocator = std.testing.allocator;
+    for ([_]cli.ResetAction{ .enable, .disable, .status, .test_notification }, [_][:0]const u8{ "enable", "disable", "status", "test" }) |expected, arg| {
+        var parsed = try cli.parseArgs(allocator, &.{ "codex-auth", "resets", "notify", arg });
+        defer cli.freeParseResult(allocator, &parsed);
+        try std.testing.expectEqual(expected, parsed.command.resets.action);
+    }
+    var parsed = try cli.parseArgs(allocator, &.{ "codex-auth", "resets", "--cached", "--json" });
+    defer cli.freeParseResult(allocator, &parsed);
+    try std.testing.expect(parsed.command.resets.cached and parsed.command.resets.json);
+    try std.testing.expectEqual(cli.ResetAction.show, parsed.command.resets.action);
+    for ([_][]const [:0]const u8{
+        &.{ "codex-auth", "resets", "--cached", "--cached" },
+        &.{ "codex-auth", "resets", "notify" },
+        &.{ "codex-auth", "resets", "notify", "enable", "extra" },
+        &.{ "codex-auth", "resets", "watch", "--json" },
+        &.{ "codex-auth", "resets", "--help", "--json" },
+    }) |args| {
+        var invalid = try cli.parseArgs(allocator, args);
+        defer cli.freeParseResult(allocator, &invalid);
+        try std.testing.expect(invalid == .usage_error);
+        try std.testing.expectEqual(cli.HelpTopic.resets, invalid.usage_error.topic);
+    }
+}

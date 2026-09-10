@@ -180,6 +180,7 @@ fn runMain() !void {
             .top_level => try handleTopLevelHelp(allocator, codex_home.?),
             else => try cli.printCommandHelp(topic),
         },
+        .resets => |opts| try @import("resets.zig").run(allocator, codex_home.?, opts),
         .status => try auto.printStatus(allocator, codex_home.?),
         .daemon => |opts| switch (opts.mode) {
             .watch => try auto.runDaemon(allocator, codex_home.?),
@@ -200,7 +201,8 @@ fn runMain() !void {
 }
 
 fn isHandledCliError(err: anyerror) bool {
-    return err == error.AccountNotFound or
+    return err == error.ResetCommandFailed or
+        err == error.AccountNotFound or
         err == error.CodexLoginFailed or
         err == error.NodeJsRequired or
         err == error.RemoveConfirmationUnavailable or
@@ -211,7 +213,7 @@ fn isHandledCliError(err: anyerror) bool {
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     if (std.process.hasNonEmptyEnvVarConstant(skip_service_reconcile_env)) return false;
     return switch (cmd) {
-        .help, .version, .status, .daemon => false,
+        .help, .version, .status, .daemon, .resets => false,
         else => true,
     };
 }

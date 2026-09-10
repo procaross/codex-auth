@@ -2,9 +2,10 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
-## This fork: halftone portrait and subscription dates
+## This fork: halftone dashboard, subscription dates and reset news
 
-This branch is based on upstream **v0.2.10**. `codex-auth list` pairs a detailed
+The default `fork-main` branch is based on upstream **v0.2.10**. The original
+upstream `main` remains available separately. `codex-auth list` pairs a detailed
 retro space-exploration robot with an uncluttered account dashboard.
 The illustration uses cyan Braille halftone dots: eight dots per character, up to a **128 x 128 dot**
 portrait. Quota bars use the same dot style.
@@ -52,6 +53,57 @@ token refresh, or registry migration is needed for this feature.
 - A date in the past is labeled `past snapshot`, not proof that billing expired.
 - Automatic renewal and the next charge date cannot be determined from these
   claims. A renewed subscription may require a fresh login to update its snapshot.
+
+### Reset news and system notifications
+
+```shell
+codex-auth resets                        # latest, scheduled and forecast information
+codex-auth resets --cached               # offline snapshot
+codex-auth resets --json                 # structured data and cache freshness
+codex-auth resets notify enable          # macOS: background checks, also after login
+codex-auth resets notify status          # service, last check and errors
+codex-auth resets notify test            # send an explicitly labeled test notification
+codex-auth resets notify disable         # remove the background job
+codex-auth resets watch                  # foreground notifications (macOS / Linux)
+```
+
+The [Codex Resets public API](https://codex-resets.com/api/docs) supplies reset
+announcements. `resets` distinguishes regular usage resets, banked reset-credit
+announcements, pending scheduled resets, and **AI forecasts**. A passed scheduled
+time does not imply execution. Public announcements do not establish your
+account's eligibility or personal credit balance.
+
+- The first successful notification check saves a quiet baseline. New executed
+  announcements, scheduled announcements, and new or strengthened forecasts
+  notify once. A scheduled announcement later reported as executed notifies
+  again. Changing feed generation timestamps, percentages or wording alone does
+  not produce another notification. Expired forecasts do not notify.
+- Checks run every **5 minutes** while the computer is awake and the user is
+  signed in. The client revalidates using `ETag` / `If-None-Match`, honors
+  `Retry-After`, and backs off on network errors. Offline output explicitly labels
+  its cached snapshot. This is polling of current status, not a real-time stream;
+  intermediate announcements during a long offline period may not be replayed.
+- macOS background checks use a separate per-`CODEX_HOME` LaunchAgent. No terminal
+  needs to remain open. Linux supports foreground `watch` with `notify-send`;
+  automatic background installation currently supports macOS only. Viewing news
+  works on all supported platforms with Node.js 22+.
+- State and notification history live in `CODEX_HOME/reset-news/state.json`.
+  Fetches use no account credentials. The monitor does not read authentication
+  files, modify the account registry, switch accounts, or consume reset credits.
+- Notifications use macOS `osascript` (Script Editor notifications) or Linux
+  `notify-send`. If the test command succeeds but no banner appears, allow the
+  relevant app in system notification settings and check Focus / Do Not Disturb.
+  OS acceptance of a notification does not prove it was displayed.
+- The job retains the Node executable, `PATH`, and proxy environment from the
+  terminal where it was enabled. With the existing wrapper, it keeps using
+  `http://127.0.0.1:7890`. Re-run `notify enable` after changing the executable or
+  proxy. Native environment proxy support needs Node.js 22.21+ or 24+.
+- `list --skip-api` remains entirely independent of the public feed. Use `resets`
+  to view public announcements; `resets check` performs one enabled monitor check.
+
+For development, run `zig test src/main.zig -lc`, `zig build`, and
+`node --test tests/*.test.mjs`. Reset tests use synthetic API responses, isolated
+state, and fake notification delivery; they never contact your accounts.
 
 The upstream npm package below does **not** include this fork's changes. To build
 this branch with Zig **0.15.1**:
