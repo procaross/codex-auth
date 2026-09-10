@@ -7,11 +7,12 @@ with breathing, a moving scan band, and subtle pointer movement. This is a
 native app, not a web view. No image generation or extra image downloads occur
 at runtime.
 
-The quota/news selector uses one moving clear-glass lens over an offset blue
-backing, with a fine prismatic edge. It supports click, drag, and keyboard
-selection, springs into place on release, and expands slightly while pressed.
-Reduce Motion removes the spring and expansion; Reduce Transparency uses an
-opaque selected state.
+The quota/news selector is SwiftUI's native segmented `Picker` at the system's
+extra-large control size. macOS owns its material, selection feedback, tracking,
+and accessibility behavior. It uses the system accent and intrinsic size, with
+no custom glass overlay, painted backing, border, or drag animation. Its resting
+appearance and interactive effects follow the OS and system accessibility settings;
+it does not apply a continuously refracting custom shader.
 
 ## Build and install
 
