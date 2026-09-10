@@ -7,6 +7,13 @@ with breathing, a moving scan band, and subtle pointer movement. This is a
 native app, not a web view. No image generation or extra image downloads occur
 at runtime.
 
+The compact header shows the saved-account count instead of a welcome slogan.
+Account names have their own selectable line; hover to reveal the full email.
+The current login is labeled independently from the account being previewed.
+Switching actions keep a fixed header slot so choosing a saved account does not
+shift the subscription record or account list. Subscription records remain saved
+login information, not confirmed billing dates.
+
 The quota/news selector is SwiftUI's native segmented `Picker` at the system's
 extra-large control size. macOS owns its material, selection feedback, tracking,
 and accessibility behavior. It uses the system accent and intrinsic size, with
