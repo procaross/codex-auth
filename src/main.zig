@@ -1498,7 +1498,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
             defaultAccountFetcher,
             account_api_enabled,
         );
-        try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+        try printAccountsWithSubscriptionDates(allocator, codex_home, &reg, usage_state.usage_overrides);
         return;
     }
 
@@ -1527,7 +1527,18 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         defaultAccountFetcher,
         account_api_enabled,
     );
-    try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+    try printAccountsWithSubscriptionDates(allocator, codex_home, &reg, usage_state.usage_overrides);
+}
+
+fn printAccountsWithSubscriptionDates(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !void {
+    const snapshots = try @import("subscription_display.zig").loadSnapshots(allocator, codex_home, reg);
+    defer allocator.free(snapshots);
+    try format.printAccountsWithSubscriptions(reg, usage_overrides, snapshots);
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
@@ -2196,6 +2207,8 @@ test "handled cli errors include missing node" {
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
 test {
+    _ = @import("format.zig");
+    _ = @import("tests/subscription_test.zig");
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");
     _ = @import("tests/account_api_test.zig");

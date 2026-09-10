@@ -4,6 +4,39 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
+## This fork: subscription dates
+
+This branch is based on upstream **v0.2.10**. `codex-auth list` now shows the
+subscription's last-known **valid-until** time, remaining full days, and the
+subscription's **last-checked** time below each account. Times use the local
+timezone and include the UTC offset. This also works with `list --skip-api`.
+
+The dates come from `chatgpt_subscription_active_until` and
+`chatgpt_subscription_last_checked` in each account's saved ID token. They do
+not use the token's `exp` field or usage reset times. No additional API request,
+token refresh, or registry migration is needed for this feature.
+
+- Missing, malformed, or unavailable dates are shown as `unknown`.
+- A date in the past is labeled `past snapshot`, not proof that billing expired.
+- Automatic renewal and the next charge date cannot be determined from these
+  claims. A renewed subscription may require a fresh login to update its snapshot.
+
+The upstream npm package below does **not** include this fork's changes. To build
+this branch with Zig **0.15.1**:
+
+```shell
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/codex-auth list --skip-api
+```
+
+If Zig 0.15.1 cannot link against a recent Xcode SDK, use the installed Command
+Line Tools SDK for that build (this does not change the system Xcode selection):
+
+```shell
+DEVELOPER_DIR=/Library/Developer/CommandLineTools zig build -Dtarget=aarch64-macos.15.0 -Doptimize=ReleaseSafe
+```
+
+
 > [!IMPORTANT]
 > For **Codex CLI** and **Codex App** users, switch accounts, then restart the client for the new account to take effect.
 >

@@ -3,6 +3,55 @@ const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
+test "subscription dates display offline for active and stored accounts without changing auth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex/accounts");
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const fixture = @import("subscription_test.zig").fixture;
+    const active = try fixture(gpa, "account-a", "\"2030-01-02T03:04:05Z\"", "\"2029-12-31T00:00:00Z\"");
+    defer gpa.free(active);
+    const stored = try fixture(gpa, "account-b", "\"2031-01-02T03:04:05Z\"", "null");
+    defer gpa.free(stored);
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    for ([_][]const u8{ active, stored }) |data| {
+        const info = try @import("../auth.zig").parseAuthInfoData(gpa, data);
+        defer info.deinit(gpa);
+        try registry.upsertAccount(gpa, &reg, try registry.accountFromAuth(gpa, "", &info));
+        const path = try registry.accountAuthPath(gpa, codex_home, info.record_key.?);
+        defer gpa.free(path);
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = data });
+    }
+    try registry.setActiveAccountKey(gpa, &reg, "user-fixture::account-a");
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active });
+    for ([_][]const []const u8{ &.{ "list", "--skip-api" }, &.{ "list", "--skip-api", "--debug" } }) |args| {
+        // No Node on PATH: the subscription display must work entirely offline.
+        const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, home_root, args);
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        try expectSuccess(result);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Subscription valid until: 2030-") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Subscription valid until: 2031-") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Subscription last checked:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "not confirmed renewal dates") != null);
+        const unchanged = try tmp.dir.readFileAlloc(gpa, ".codex/auth.json", 1024 * 1024);
+        defer gpa.free(unchanged);
+        try std.testing.expectEqualStrings(active, unchanged);
+        var loaded = try registry.loadRegistry(gpa, codex_home);
+        defer loaded.deinit(gpa);
+        try std.testing.expectEqual(@as(u32, 3), loaded.schema_version);
+    }
+}
+
 const e2e_install_prefix_env = "CODEX_AUTH_E2E_INSTALL_PREFIX";
 const e2e_project_root_env = "CODEX_AUTH_E2E_PROJECT_ROOT";
 

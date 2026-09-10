@@ -4,6 +4,7 @@ const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
+const subscription = @import("subscription.zig");
 const c = @cImport({
     @cInclude("time.h");
 });
@@ -79,6 +80,27 @@ fn writeAccountsTableWithUsageOverrides(
     reg: *registry.Registry,
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
+) !void {
+    try writeAccountsTableWithSubscriptions(out, reg, use_color, usage_overrides, null);
+}
+
+pub fn printAccountsWithSubscriptions(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    snapshots: []const subscription.Snapshot,
+) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try writeAccountsTableWithSubscriptions(stdout.out(), reg, colorEnabled(), usage_overrides, snapshots);
+    try stdout.out().flush();
+}
+
+fn writeAccountsTableWithSubscriptions(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+    snapshots: ?[]const subscription.Snapshot,
 ) !void {
     const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
     var widths = [_]usize{
@@ -199,6 +221,13 @@ fn writeAccountsTableWithUsageOverrides(
             try writePadded(out, last_cell, widths[4]);
             try out.writeAll("\n");
             if (use_color) try out.writeAll(ansi.reset);
+            if (snapshots) |items| {
+                if (account_idx < items.len) {
+                    if (use_color) try out.writeAll(ansi.dim);
+                    try writeSubscriptionDetails(out, items[account_idx], now, prefix_len + indent_to_print);
+                    if (use_color) try out.writeAll(ansi.reset);
+                }
+            }
             selectable_counter += 1;
         } else {
             const account_cell = try truncateAlloc(row.account_cell, widths[0]);
@@ -210,6 +239,41 @@ fn writeAccountsTableWithUsageOverrides(
             if (use_color) try out.writeAll(ansi.reset);
         }
     }
+    if (snapshots != null and reg.accounts.items.len > 0) {
+        try out.writeAll("\nSubscription dates are saved login snapshots, not confirmed renewal dates.\n");
+        try out.writeAll("Times are local. Past or unknown snapshots may need a fresh login.\n");
+    }
+}
+
+fn writeSubscriptionDetails(out: *std.Io.Writer, snapshot: subscription.Snapshot, now: i64, indent: usize) !void {
+    try writeRepeat(out, ' ', indent);
+    try out.writeAll("Subscription valid until: ");
+    if (snapshot.valid_until) |until| {
+        try writeSubscriptionTime(out, until);
+        if (until <= now) {
+            try out.writeAll(" (past snapshot)");
+        } else {
+            const days = @divTrunc(until - now, 86400);
+            if (days == 0) try out.writeAll(" (<1d remaining)") else try out.print(" ({d}d remaining)", .{days});
+        }
+    } else try out.writeAll("unknown");
+    try out.writeAll("\n");
+    if (snapshot.checked_at) |checked| {
+        try writeRepeat(out, ' ', indent);
+        try out.writeAll("Subscription last checked: ");
+        try writeSubscriptionTime(out, checked);
+        try out.writeAll("\n");
+    }
+}
+
+fn writeSubscriptionTime(out: *std.Io.Writer, ts: i64) !void {
+    var tm: c.struct_tm = undefined;
+    if (!localtimeCompat(ts, &tm)) return out.writeAll("unknown");
+    // Reuse the same local timezone conversion as usage-reset times.
+    var buf: [64]u8 = undefined;
+    const len = c.strftime(&buf, buf.len, "%Y-%m-%d %H:%M %z", &tm);
+    if (len == 0) return out.writeAll("unknown");
+    try out.writeAll(buf[0..len]);
 }
 
 fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
@@ -732,6 +796,41 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
 }
 
+test "subscription details distinguish future dates from past snapshots and unknown" {
+    const now = subscription.parseTimestamp("2030-01-02T12:00:00Z").?;
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeSubscriptionDetails(&writer, .{ .valid_until = now + 2 * 86400, .checked_at = now }, now, 5);
+    try writeSubscriptionDetails(&writer, .{ .valid_until = now + 60 }, now, 5);
+    try writeSubscriptionDetails(&writer, .{ .valid_until = now }, now, 5);
+    try writeSubscriptionDetails(&writer, .{}, now, 5);
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription valid until: 2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription last checked: 2030-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "(2d remaining)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "(<1d remaining)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "(past snapshot)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Subscription valid until: unknown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "expired") == null);
+}
+
+test "subscription details follow selectable rows in grouped account output" {
+    const allocator = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(allocator);
+    try appendTestAccount(allocator, &reg, "user-1::acc-1", "user@example.com", "", .pro);
+    try appendTestAccount(allocator, &reg, "user-1::acc-2", "user@example.com", "", .free);
+    const snapshots = [_]subscription.Snapshot{
+        .{ .valid_until = subscription.parseTimestamp("2030-01-02T03:04:05Z") }, .{},
+    };
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithSubscriptions(&writer, &reg, false, null, &snapshots);
+    const output = writer.buffered();
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "Subscription valid until:"));
+    try std.testing.expect(std.mem.indexOf(u8, output, "not confirmed renewal dates") != null);
+}
+
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -771,4 +870,3 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
 }
-
