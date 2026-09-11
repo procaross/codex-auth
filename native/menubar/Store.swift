@@ -82,6 +82,7 @@ final class CommandRunner: @unchecked Sendable {
     @Published var busy = false
     @Published var visible = false
     @Published var error: String?
+    @Published var refreshError: String?
     @Published var notice: String?
     @Published var tab = 0
     @Published var settings = false
@@ -93,11 +94,16 @@ final class CommandRunner: @unchecked Sendable {
     private var lastAttempt = Date.distantPast
     private var registryReadable = true
     private var loginTask: Task<Void, Never>?
+    private let cliOverride: URL?
+    private let now: () -> Date
+    private var stopping = false
 
-    init(demo: Bool = false) {
+    init(demo: Bool = false, home: URL? = nil, cli: URL? = nil, now: @escaping () -> Date = Date.init) {
         self.demo = demo
+        self.cliOverride = cli
+        self.now = now
         let customHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
-        codexHome = customHome.map { URL(fileURLWithPath: $0, isDirectory: true) } ??
+        codexHome = home ?? customHome.map { URL(fileURLWithPath: $0, isDirectory: true) } ??
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
         if demo { loadDemo() } else { reload() }
     }
@@ -109,6 +115,7 @@ final class CommandRunner: @unchecked Sendable {
     }
     var proxyEnabled: Bool { UserDefaults.standard.object(forKey: "proxyEnabled") as? Bool ?? true }
     var executable: URL? {
+        if let cliOverride { return cliOverride }
         let candidates = [Bundle.main.resourceURL?.appendingPathComponent("codex-auth"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/codex-auth-fork/bin/codex-auth")]
         return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0.path) }
@@ -153,6 +160,7 @@ final class CommandRunner: @unchecked Sendable {
     }
 
     func stop() {
+        stopping = true
         loginTask?.cancel()
         runner.stop()
     }
@@ -197,30 +205,44 @@ final class CommandRunner: @unchecked Sendable {
     func opened() {
         visible = true
         reload()
-        if Date().timeIntervalSince(lastAttempt) > 300 { Task { await refresh() } }
+        Task { await refreshIfNeeded() }
     }
 
-    func refresh() async {
-        guard !busy else { return }
+    func refreshIfNeeded() async {
+        guard !demo, !busy, !stopping else { return }
+        let age = now().timeIntervalSince(lastAttempt)
+        // A clock adjustment must not postpone updates indefinitely. Busy ticks
+        // do not advance lastAttempt, so the next idle tick can catch up.
+        guard age >= 300 || age < 0 else { return }
+        await refresh(automatically: true)
+    }
+
+    func refresh(automatically: Bool = false) async {
+        guard !busy, !stopping else { return }
         if demo {
             busy = true
             try? await Task.sleep(for: .milliseconds(450))
             busy = false
             return
         }
-        guard let executable else { error = "未找到 codex-auth。请用构建脚本打包本分支的 CLI。"; return }
-        busy = true; error = nil; notice = nil; lastAttempt = Date()
+        guard let executable else { refreshError = "未找到 codex-auth。请用构建脚本打包本分支的 CLI。"; return }
+        busy = true; refreshError = nil; lastAttempt = now()
+        // Background maintenance must not erase login/switch feedback.
+        if !automatically { error = nil; notice = nil }
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Refresh Codex account quota")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
         defer { busy = false; onChange?() }
         var failures: [String] = []
         do {
             try await runner.run(executable: executable, arguments: ["list", "--api"], home: codexHome, proxy: proxyEnabled)
         } catch { failures.append("额度刷新失败") }
+        guard !stopping, !Task.isCancelled else { return }
         reload()
         do {
             try await runner.run(executable: executable, arguments: ["resets", "--json"], home: codexHome, proxy: proxyEnabled)
         } catch { failures.append("重置消息刷新失败") }
         reloadNews()
-        if !failures.isEmpty { error = failures.joined(separator: "，") + "。正在显示缓存；请检查网络、代理或 Node.js。" }
+        if !failures.isEmpty { refreshError = failures.joined(separator: "，") + "。正在显示缓存；请检查网络、代理或 Node.js。" }
     }
 
     func switchSelected() async {

@@ -160,6 +160,85 @@ import Foundation
         expect(first.accounts.count == 1 && first.activeAccountKey == nil && !fm.fileExists(atPath: firstHome.appendingPathComponent("auth.json").path), "first account is saved without silently activating a login")
     }
 
+    @MainActor static func backgroundRefreshChecks(at root: URL) async throws {
+        let fm = FileManager.default
+        let home = root.appendingPathComponent("background-home")
+        try fm.createDirectory(at: home.appendingPathComponent("accounts"), withIntermediateDirectories: true)
+        try auth().write(to: home.appendingPathComponent("auth.json"))
+        let fixture = root.appendingPathComponent("background-registry.json")
+        try Data("""
+        {"schema_version":3,"accounts":[{"account_key":"user::account","email":"user@example.test","alias":"","auth_mode":"chatgpt","last_usage":{"primary":{"used_percent":27,"window_minutes":300}},"last_usage_at":1800000000}]}
+        """.utf8).write(to: fixture)
+        let cli = try script("background-cli", at: root, body: """
+        printf '%s\\n' "$1" >> "$CODEX_HOME/calls"
+        if [ -e "$CODEX_HOME/fail" ]; then exit 1; fi
+        if [ "$1" = list ]; then
+          /bin/cp \(quoted(fixture.path)) "$CODEX_HOME/accounts/registry.json"
+        fi
+        /bin/sleep 0.1
+        """)
+        func calls() -> [String] {
+            ((try? String(contentsOf: home.appendingPathComponent("calls"), encoding: .utf8)) ?? "")
+                .split(separator: "\n").map(String.init)
+        }
+        var clock = Date(timeIntervalSince1970: 1800000000)
+        let store = AppStore(home: home, cli: cli, now: { clock })
+        var statusUpdates = 0
+        store.onChange = { statusUpdates += 1 }
+        store.notice = "Switch completed; restart reminder"
+        store.error = "Unrelated account action feedback"
+        await store.refreshIfNeeded()
+        expect(calls() == ["list", "resets"], "hidden startup refresh fetches both quota and reset news")
+        expect(!store.visible && store.active?.fiveHour?.remaining == 73 && statusUpdates > 0, "background refresh updates menu data without opening the panel")
+        expect(store.notice != nil && store.error != nil, "automatic refresh preserves account action feedback")
+        clock += 299
+        await store.refreshIfNeeded()
+        expect(calls().count == 2, "fresh cache suppresses duplicate opening and wake refreshes")
+        clock += 1
+        store.busy = true
+        await store.refreshIfNeeded()
+        expect(calls().count == 2, "login or switching defers a due background refresh")
+        store.busy = false
+        await store.refreshIfNeeded()
+        expect(calls().count == 4, "next idle check catches up without losing the due refresh")
+        clock += 300
+        let first = Task { await store.refreshIfNeeded() }
+        for _ in 0..<50 {
+            if store.busy { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        expect(store.busy, "overlap test observes an in-flight refresh")
+        await store.refreshIfNeeded()
+        await first.value
+        expect(calls().count == 6 && !store.busy, "simultaneous timer and wake checks share one refresh")
+        let failure = home.appendingPathComponent("fail")
+        try Data().write(to: failure)
+        clock += 300
+        await store.refreshIfNeeded()
+        expect(store.refreshError != nil && store.active?.fiveHour?.remaining == 73, "background API failure keeps cached quota and reports failure")
+        await store.refreshIfNeeded()
+        expect(calls().count == 8, "failed refresh is throttled rather than retried continuously")
+        try fm.removeItem(at: failure)
+        clock += 300
+        await store.refreshIfNeeded()
+        expect(calls().count == 10 && store.refreshError == nil && store.error != nil, "scheduled recovery clears only the refresh error")
+        clock += 3600
+        await store.refreshIfNeeded()
+        expect(calls().count == 12 && !store.visible, "wake after a long gap catches up while the panel stays hidden")
+        clock -= 7200
+        await store.refreshIfNeeded()
+        expect(calls().count == 14, "backward clock adjustment cannot suspend refreshing")
+        await store.refresh()
+        expect(calls().count == 16 && store.notice == nil && store.error == nil, "manual refresh bypasses interval and clears action feedback")
+        let demo = AppStore(demo: true, home: home, cli: cli, now: { clock })
+        await demo.refreshIfNeeded()
+        expect(calls().count == 16 && !demo.visible, "demo never starts automatic CLI requests")
+        store.stop()
+        clock += 300
+        await store.refreshIfNeeded()
+        expect(calls().count == 16, "shutdown prevents queued background checks from starting commands")
+    }
+
     static func main() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("codex-auth-menubar-tests-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("accounts"), withIntermediateDirectories: true)
@@ -230,6 +309,7 @@ import Foundation
             fatalError("accepted stalled CLI")
         } catch { expect(Date().timeIntervalSince(start) < 3, "stalled CLI terminates within deadline") }
         try await loginChecks(at: root)
+        try await backgroundRefreshChecks(at: root)
         if let importer = ProcessInfo.processInfo.environment["CODEX_AUTH_TEST_IMPORTER"] {
             try await importIntegration(at: root, executable: URL(fileURLWithPath: importer))
         }
