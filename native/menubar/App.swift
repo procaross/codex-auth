@@ -63,13 +63,17 @@ final class CompanionPanel: NSPanel {
             hosting.topAnchor.constraint(equalTo: glass.topAnchor), hosting.bottomAnchor.constraint(equalTo: glass.bottomAnchor)
         ])
         panel.contentView = glass
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        let refreshTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.store.visible else { return }
-                self.store.opened()
+                await self?.store.refreshIfNeeded()
             }
         }
+        refreshTimer.tolerance = 5
+        RunLoop.main.add(refreshTimer, forMode: .common)
+        self.refreshTimer = refreshTimer
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(closePanel), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
+        Task { await store.refreshIfNeeded() }
         let firstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunched")
         if !demo { UserDefaults.standard.set(true, forKey: "hasLaunched") }
         if CommandLine.arguments.contains("--show") || demo || firstLaunch { showPanel() }
@@ -120,6 +124,10 @@ final class CompanionPanel: NSPanel {
         removeMonitors()
     }
 
+    @objc private func systemDidWake() {
+        Task { await store.refreshIfNeeded() }
+    }
+
     private func removeMonitors() {
         if let localMonitor { NSEvent.removeMonitor(localMonitor); self.localMonitor = nil }
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor); self.globalMonitor = nil }
@@ -145,6 +153,7 @@ final class CompanionPanel: NSPanel {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         refreshTimer?.invalidate(); removeMonitors(); store.stop()
     }
 

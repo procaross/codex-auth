@@ -24,7 +24,7 @@ struct PanelView: View {
                 SystemTabs(selection: $store.tab).padding(.horizontal, 22).padding(.bottom, 15)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
-                        if let error = store.error { message(error, warning: true) }
+                        if let error = store.error ?? store.refreshError { message(error, warning: true) }
                         if let notice = store.notice { message(notice, warning: false) }
                         if store.tab == 0 { accountContent } else { newsContent }
                     }
@@ -285,11 +285,11 @@ struct PanelView: View {
                     .accessibilityLabel("登录时启动").accessibilityHint("启动后显示在菜单栏")
             }
             .toggleStyle(.switch).controlSize(.small).padding(17).cardSurface()
-            Text("收起面板后暂停动画和自动刷新。遵循系统的“减少动态效果”和“降低透明度”设置。")
+            Text("后台约每 5 分钟刷新额度与重置动态，电脑唤醒后会补刷。收起面板后暂停动画。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("切换账号后需手动重启 Codex。重置动态仅供查看，不会领取或消耗重置次数。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let error = store.error { message(error, warning: true) }
+            if let error = store.error ?? store.refreshError { message(error, warning: true) }
             Link(destination: URL(string: "https://github.com/procaross/codex-auth")!) {
                 Label("开源项目", systemImage: "arrow.up.right.square").font(.system(size: 12))
             }

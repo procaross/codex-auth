@@ -93,11 +93,15 @@ notification helper's `com.procaross.codex-auth.notifications`.
   Public news does not establish personal reset-credit eligibility or balance.
 - Viewing reset news does not send notifications, enable a second monitor,
   or consume credits. An existing Slack worker continues independently.
-- Opening the panel refreshes when at least five minutes have elapsed since
-  the previous attempt. An open panel checks that interval once per minute.
-  When hidden, it starts no new polling and pauses animation; an already
-  running request may finish. CLI commands run off the main thread, with
-  deadlines and no captured credential-bearing output.
+- The app refreshes at launch and checks once per minute whether five minutes
+  have elapsed since the previous attempt, even with the panel closed. Opening
+  the panel and waking the computer also check for a due refresh. Refreshing
+  updates the menu bar without opening the panel or starting its animation.
+  macOS may coalesce timers; the app does not prevent system sleep. Login,
+  switching, and existing refreshes defer automatic work until the next check.
+  Failed requests retain cached values and retry at the normal interval.
+  Background refresh preserves login/switch feedback. CLI commands run off the
+  main thread, with deadlines and no captured credential-bearing output.
 - Proxy use defaults to `http://127.0.0.1:7890`; disabling it removes proxy
   variables from child commands without changing shell or CLI configuration.
 - Animation and proxy preferences are native toggles. The app follows light /
@@ -133,7 +137,9 @@ The standalone Swift checks cover quota window mapping, JWT identity isolation,
 subscription dates, safe snapshot paths, ambiguous account selectors, missing /
 malformed registries, expired forecasts, source URL handling, CLI deadlines,
 private browser-login staging, cancellation (including a process ignoring
-SIGTERM), cleanup, and native CLI discovery. Optional real-CLI integration
+SIGTERM), cleanup, native CLI discovery, hidden refresh, throttling, overlap,
+busy deferral, clock changes, and recovery without losing cached quota.
+Optional real-CLI integration
 checks cover add-only imports, active-login preservation, duplicate sign-in,
 and adding the first account. Tests never open a real browser login.
 Visual checks should cover light and dark panels, account preview, scrolling,
