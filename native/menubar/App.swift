@@ -135,8 +135,17 @@ final class CompanionPanel: NSPanel {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(); return true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard store.loginPhase != nil else { return .terminateNow }
+        Task {
+            await store.finishLoginForQuit()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        refreshTimer?.invalidate(); removeMonitors(); store.runner.stop()
+        refreshTimer?.invalidate(); removeMonitors(); store.stop()
     }
 
     private static func statusIcon() -> NSImage {

@@ -58,6 +58,7 @@ struct PanelView: View {
                 Image(systemName: store.settings ? "xmark" : "slider.horizontal.3").frame(width: 14, height: 14)
             }
             .help(store.settings ? "返回" : "设置").accessibilityLabel(store.settings ? "返回" : "设置")
+            .disabled(store.loginPhase != nil)
         }
         .buttonStyle(.glass).controlSize(.small).tint(nil as Color?)
     }
@@ -65,10 +66,25 @@ struct PanelView: View {
     private var hero: some View {
         HStack(alignment: .center, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(store.tab == 0 ? "账号管理" : "重置动态")
+                Text(store.loginPhase == .waiting ? "等待登录" : store.loginPhase == .saving ? "正在保存" : store.tab == 0 ? "账号管理" : "重置动态")
                     .font(.system(size: 21, weight: .semibold))
-                Text(store.tab == 0 ? "已保存 \(store.accounts.count) 个账号" : "来自 Codex Resets")
+                Text(store.loginPhase == .waiting ? "请在浏览器中完成授权" : store.loginPhase == .saving ? "正在更新账号列表" : store.tab == 0 ? "已保存 \(store.accounts.count) 个账号" : "来自 Codex Resets")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
+                if let phase = store.loginPhase {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini)
+                        if phase == .waiting {
+                            Button("取消") { store.cancelLogin() }.buttonStyle(.glass).controlSize(.small)
+                                .accessibilityLabel("取消添加账号")
+                        }
+                    }.frame(height: 25)
+                } else if store.tab == 0 {
+                    Button { store.addAccount() } label: {
+                        Label("添加账号", systemImage: "plus").font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.glass).controlSize(.small).disabled(!store.addAvailable)
+                    .help(store.demo ? "演示模式不会打开真实登录" : "在浏览器登录，只添加到列表，不切换当前账号。")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             PixelRobot(running: store.visible && animationEnabled).frame(width: 168, height: 140)
@@ -124,7 +140,7 @@ struct PanelView: View {
             }
 
         } else {
-            emptyState("还没有保存的账号", detail: "先在终端运行 codex-auth login，完成登录后刷新。", icon: "person.crop.circle.badge.plus")
+            emptyState("还没有保存的账号", detail: "点击上方「添加账号」，在浏览器登录后会自动显示在这里。", icon: "person.crop.circle.badge.plus")
         }
     }
 

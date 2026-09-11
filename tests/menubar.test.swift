@@ -15,9 +15,149 @@ import Foundation
     static func auth(user: String = "user", account: String = "account", tokenAccount: String = "account", date: String? = "2026-10-04T11:13:00+08:00") throws -> Data {
         var claims: [String: Any] = ["chatgpt_user_id": user, "chatgpt_account_id": account]
         if let date { claims["chatgpt_subscription_active_until"] = date }
-        let body = try JSONSerialization.data(withJSONObject: ["https://api.openai.com/auth": claims, "exp": 1])
+        let body = try JSONSerialization.data(withJSONObject: ["https://api.openai.com/auth": claims, "email": user + "@example.test", "exp": 1])
         let payload = body.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": tokenAccount, "id_token": "header." + payload + ".signature"]])
+    }
+
+    static func script(_ name: String, at root: URL, body: String) throws -> URL {
+        let url = root.appendingPathComponent(name)
+        try Data(("#!/bin/sh\nset -eu\n" + body + "\n").utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        return url
+    }
+
+    static func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+    static func loginChecks(at root: URL) async throws {
+        let fm = FileManager.default
+        let scratchRoot = root.appendingPathComponent("login scratch")
+        func scratchIsEmpty() -> Bool { (try? fm.contentsOfDirectory(atPath: scratchRoot.path))?.isEmpty == true }
+        let target = root.appendingPathComponent("target")
+        try fm.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target.appendingPathComponent("accounts"), withIntermediateDirectories: true)
+        let original = try auth(user: "original")
+        try original.write(to: target.appendingPathComponent("auth.json"))
+        let fixture = root.appendingPathComponent("new-auth.json")
+        try auth().write(to: fixture)
+        let registry = root.appendingPathComponent("new-registry.json")
+        try Data("{\"schema_version\":3,\"active_account_key\":\"original::account\",\"accounts\":[{\"account_key\":\"user::account\",\"email\":\"new@example.test\",\"alias\":\"\"}]}".utf8).write(to: registry)
+        let login = try script("fake-login", at: root, body: """
+        test "$#" -eq 3
+        test "$1" = login
+        test "$2" = -c
+        test "$3" = 'cli_auth_credentials_store="file"'
+        test "$CODEX_HOME" != \(quoted(target.path))
+        test "$(/usr/bin/stat -f %Lp "$CODEX_HOME")" = 700
+        test "$(pwd -P)" = "$(cd "$CODEX_HOME" && pwd -P)"
+        /bin/cp \(quoted(fixture.path)) "$CODEX_HOME/auth.json"
+        """)
+        let marker = root.appendingPathComponent("imported")
+        let importer = try script("fake-import", at: root, body: """
+        test "$#" -eq 2
+        test "$1" = import
+        test "$CODEX_HOME" = \(quoted(target.path))
+        test -f "$2"
+        /bin/cp \(quoted(registry.path)) "$CODEX_HOME/accounts/registry.json"
+        /usr/bin/touch \(quoted(marker.path))
+        """)
+        let key = try await AccountLogin.add(codex: login, importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+        expect(key == "user::account", "browser login uses private file storage and add-only import")
+        let after = try Data(contentsOf: target.appendingPathComponent("auth.json"))
+        expect(after == original, "adding an account preserves the active login byte for byte")
+        expect(scratchIsEmpty(), "successful login removes temporary credentials")
+        try fm.removeItem(at: marker)
+        do {
+            _ = try await AccountLogin.add(codex: URL(fileURLWithPath: "/usr/bin/false"), importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+            fatalError("accepted failed login")
+        } catch { expect(!fm.fileExists(atPath: marker.path), "failed login never imports") }
+        do {
+            _ = try await AccountLogin.add(codex: URL(fileURLWithPath: "/usr/bin/true"), importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+            fatalError("accepted login without credentials")
+        } catch { expect(!fm.fileExists(atPath: marker.path), "missing credentials never import") }
+        do {
+            _ = try await AccountLogin.add(codex: login, importer: URL(fileURLWithPath: "/usr/bin/false"), home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+            fatalError("accepted import failure")
+        } catch { expect(true, "import failure is surfaced") }
+        expect(scratchIsEmpty(), "failed flows remove temporary credentials")
+
+        let pidFile = root.appendingPathComponent("login-pid")
+        let slowLogin = try script("slow-login", at: root, body: """
+        echo $$ > \(quoted(pidFile.path))
+        trap '' TERM
+        exec /bin/sleep 20
+        """)
+        let task = Task {
+            try await AccountLogin.add(codex: slowLogin, importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+        }
+        for _ in 0..<100 {
+            if fm.fileExists(atPath: pidFile.path) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        expect(fm.fileExists(atPath: pidFile.path), "cancellation test starts a live login process")
+        let pid = Int32(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+        task.cancel()
+        do { _ = try await task.value; fatalError("accepted cancelled login") }
+        catch is CancellationError { expect(true, "cancel reaches the login operation") }
+        expect(kill(pid, 0) == -1 && errno == ESRCH, "cancellation kills even a login ignoring SIGTERM")
+        expect(!fm.fileExists(atPath: marker.path), "cancelled login never imports")
+        expect(scratchIsEmpty(), "cancellation cleans temporary credentials")
+
+        let beforeCancel = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await AccountLogin.add(codex: login, importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, willImport: {})
+        }
+        do { _ = try await beforeCancel.value; fatalError("accepted pre-cancelled login") }
+        catch is CancellationError { expect(true, "cancellation before launch is honored") }
+        let start = Date()
+        do {
+            _ = try await AccountLogin.add(codex: slowLogin, importer: importer, home: target, proxy: false, temporaryRoot: scratchRoot, timeout: 0.15, willImport: {})
+            fatalError("accepted login timeout")
+        } catch CommandError.timedOut { expect(Date().timeIntervalSince(start) < 3, "browser login has a bounded timeout") }
+        expect(scratchIsEmpty(), "timeout cleans temporary credentials")
+        expect(AccountLogin.findCodex(candidates: [URL(fileURLWithPath: "/usr/bin/true")]) != nil, "native CLI discovery works")
+        expect(AccountLogin.findCodex(candidates: [login]) == nil, "arbitrary shell wrappers are not launched as native login processes")
+        #if arch(arm64)
+        let vendor = "codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
+        #else
+        let vendor = "codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex"
+        #endif
+        let package = root.appendingPathComponent("npm/@openai/codex")
+        let native = package.appendingPathComponent("node_modules/@openai/" + vendor)
+        try fm.createDirectory(at: native.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: native)
+        expect(AccountLogin.findCodex(candidates: [package.appendingPathComponent("bin/codex.js")]) == native, "npm launcher resolves to its native child")
+    }
+
+    static func importIntegration(at root: URL, executable: URL) async throws {
+        let fm = FileManager.default
+        let target = root.appendingPathComponent("integration")
+        try fm.createDirectory(at: target.appendingPathComponent("accounts"), withIntermediateDirectories: true)
+        try Data("{\"schema_version\":3,\"api\":{\"usage\":false,\"account\":false},\"accounts\":[]}".utf8)
+            .write(to: target.appendingPathComponent("accounts/registry.json"))
+        let oldAuth = root.appendingPathComponent("integration-old.json")
+        let newAuth = root.appendingPathComponent("integration-new.json")
+        try auth(user: "original").write(to: oldAuth)
+        try auth(user: "new").write(to: newAuth)
+        let runner = CommandRunner()
+        try await runner.run(executable: executable, arguments: ["import", oldAuth.path, "--alias", "Original"], home: target, proxy: false)
+        try await runner.run(executable: executable, arguments: ["switch", "original@example.test"], home: target, proxy: false)
+        let before = try Data(contentsOf: target.appendingPathComponent("auth.json"))
+        let login = try script("integration-login", at: root, body: "/bin/cp " + quoted(newAuth.path) + " \"$CODEX_HOME/auth.json\"")
+        let added = try await AccountLogin.add(codex: login, importer: executable, home: target, proxy: false, temporaryRoot: root, willImport: {})
+        let registry = try LocalData.registry(home: target)
+        expect(added == "new::account" && registry.accounts.count == 2, "real CLI saves the newly authorized account")
+        let after = try Data(contentsOf: target.appendingPathComponent("auth.json"))
+        expect(before == after && registry.activeAccountKey == "original::account", "real CLI import preserves active credentials and active registry identity")
+        expect(registry.accounts.first(where: { $0.id == "original::account" })?.alias == "Original", "real CLI import preserves the existing account alias")
+        _ = try await AccountLogin.add(codex: login, importer: executable, home: target, proxy: false, temporaryRoot: root, willImport: {})
+        let duplicate = try LocalData.registry(home: target)
+        expect(duplicate.accounts.count == 2, "authorizing an existing account updates it without duplication")
+        let firstHome = root.appendingPathComponent("first-account")
+        try fm.createDirectory(at: firstHome, withIntermediateDirectories: true)
+        _ = try await AccountLogin.add(codex: login, importer: executable, home: firstHome, proxy: false, temporaryRoot: root, willImport: {})
+        let first = try LocalData.registry(home: firstHome)
+        expect(first.accounts.count == 1 && first.activeAccountKey == nil && !fm.fileExists(atPath: firstHome.appendingPathComponent("auth.json").path), "first account is saved without silently activating a login")
     }
 
     static func main() async throws {
@@ -89,6 +229,10 @@ import Foundation
             try await runner.run(executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["20"], home: root, proxy: false, timeout: 0.1)
             fatalError("accepted stalled CLI")
         } catch { expect(Date().timeIntervalSince(start) < 3, "stalled CLI terminates within deadline") }
+        try await loginChecks(at: root)
+        if let importer = ProcessInfo.processInfo.environment["CODEX_AUTH_TEST_IMPORTER"] {
+            try await importIntegration(at: root, executable: URL(fileURLWithPath: importer))
+        }
         print("\(count) menu bar checks passed.")
     }
 }
