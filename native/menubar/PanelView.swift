@@ -208,7 +208,7 @@ struct PanelView: View {
 
     private func accountRow(_ account: AccountRecord) -> some View {
         HStack(spacing: 0) {
-          Button { store.selectedKey = account.id; store.notice = nil } label: {
+          Button { store.selectedKey = account.id; store.dismissNotice() } label: {
             HStack(spacing: 9) {
                 Circle().fill(account.id == store.activeKey ? Palette.teal : Color.secondary.opacity(0.3)).frame(width: 5, height: 5)
                 VStack(alignment: .leading, spacing: 3) {
@@ -335,10 +335,18 @@ struct PanelView: View {
     }
 
     private func message(_ text: String, warning: Bool) -> some View {
-        Label(text, systemImage: warning ? "exclamationmark.circle" : "checkmark.circle")
-            .font(.system(size: 11)).foregroundStyle(warning ? Palette.coral : Palette.teal)
-            .fixedSize(horizontal: false, vertical: true).padding(12).frame(maxWidth: .infinity, alignment: .leading)
-            .background((warning ? Palette.coral : Palette.teal).opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        HStack(alignment: .top, spacing: 10) {
+            Label(text, systemImage: warning ? "exclamationmark.circle" : "checkmark.circle")
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            if !warning {
+                Button { store.dismissNotice() } label: {
+                    Image(systemName: "xmark").font(.system(size: 10)).frame(width: 18, height: 18)
+                }.buttonStyle(.plain).help("关闭提示").accessibilityLabel("关闭提示")
+            }
+        }
+        .foregroundStyle(warning ? Palette.coral : Palette.teal).padding(12)
+        .background((warning ? Palette.coral : Palette.teal).opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func emptyState(_ title: String, detail: String, icon: String) -> some View {

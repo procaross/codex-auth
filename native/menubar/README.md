@@ -98,6 +98,10 @@ notification helper's `com.procaross.codex-auth.notifications`.
   out-of-order samples do not notify. Delivery defaults to the current account;
   settings can include other visible accounts. macOS notification permission is
   required. Settings includes a test notification and the system settings link.
+- Temporary success feedback, including notification tests, expires after four
+  seconds and can be dismissed with **×**. Account-save confirmations remain for
+  eight seconds. The manual Codex restart reminder stays until dismissed;
+  background refresh does not clear it. Error messages do not auto-expire.
 - **After switching, restart Codex manually.** The companion does not inject
   credentials into the running Codex app or interrupt its tasks.
 - Reset news uses `codex-auth resets --json` and the existing validated public

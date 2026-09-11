@@ -185,7 +185,7 @@ import Foundation
         let store = AppStore(home: home, cli: cli, now: { clock })
         var statusUpdates = 0
         store.onChange = { statusUpdates += 1 }
-        store.notice = "Switch completed; restart reminder"
+        store.showNotice("Switch completed; restart reminder", duration: nil)
         store.error = "Unrelated account action feedback"
         await store.refreshIfNeeded()
         expect(calls() == ["list", "resets"], "hidden startup refresh fetches both quota and reset news")
@@ -237,6 +237,34 @@ import Foundation
         clock += 300
         await store.refreshIfNeeded()
         expect(calls().count == 16, "shutdown prevents queued background checks from starting commands")
+    }
+
+    @MainActor static func noticeChecks() async throws {
+        let store = AppStore(demo: true)
+        store.error = "Persistent action error"
+        store.refreshError = "Persistent refresh error"
+        store.showNotice("Notification test sent")
+        expect(store.notice != nil, "temporary success feedback appears immediately")
+        store.visible = false
+        store.settings = true
+        store.tab = 1
+        try await Task.sleep(for: .milliseconds(4200))
+        expect(store.notice == nil, "default success notice expires after four seconds even with the panel closed")
+        expect(store.error != nil && store.refreshError != nil, "notice expiry does not clear errors")
+
+        store.showNotice("Old notice", duration: .milliseconds(25))
+        store.showNotice("New notice", duration: .milliseconds(250))
+        try await Task.sleep(for: .milliseconds(75))
+        expect(store.notice == "New notice", "an old timer cannot dismiss a replacement notice")
+        store.dismissNotice()
+        expect(store.notice == nil, "the close action dismisses feedback immediately")
+        store.showNotice("Restart reminder", duration: nil)
+        try await Task.sleep(for: .milliseconds(300))
+        expect(store.notice == "Restart reminder", "manual dismissal cancels its timer and explicit restart reminders persist")
+        store.showNotice("Pending notice", duration: .milliseconds(25))
+        store.stop()
+        store.showNotice("Late completion")
+        expect(store.notice == nil, "shutdown cancels notice timers and ignores late completions")
     }
 
     static func main() async throws {
@@ -311,6 +339,7 @@ import Foundation
         try await loginChecks(at: root)
         try await backgroundRefreshChecks(at: root)
         try await insightsChecks(at: root)
+        try await noticeChecks()
         if let importer = ProcessInfo.processInfo.environment["CODEX_AUTH_TEST_IMPORTER"] {
             try await importIntegration(at: root, executable: URL(fileURLWithPath: importer))
         }
