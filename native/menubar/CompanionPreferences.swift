@@ -24,7 +24,7 @@ struct CompanionPreferences: View {
                 HStack {
                     Text(store.notificationStatus).font(.system(size: 10)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("测试通知") { Task { await store.testNotification() } }.buttonStyle(.glass).disabled(store.demo)
+                    Button("测试通知") { Task { await store.testNotification() } }.buttonStyle(.glass(.regular.tint(nil))).disabled(store.demo)
                 }
                 Link("打开系统通知设置", destination: URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                     .font(.system(size: 10))
@@ -37,7 +37,7 @@ struct CompanionPreferences: View {
                     HStack {
                         Text(store.label(account)).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        Button("恢复显示") { store.hide(account, hidden: false) }.buttonStyle(.glass)
+                        Button("恢复显示") { store.hide(account, hidden: false) }.buttonStyle(.glass(.regular.tint(nil)))
                     }.font(.system(size: 10))
                 }
             }
@@ -66,7 +66,7 @@ struct AccountEditor: View {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存") { store.decorate(account, name: name, note: note); dismiss() }.keyboardShortcut(.defaultAction)
-            }.buttonStyle(.glass)
+            }.buttonStyle(.glass(.regular.tint(nil)))
         }.padding(22).frame(width: 330)
         .onAppear { name = store.companion.accounts[account.id]?.name ?? ""; note = store.note(account) }
     }

@@ -43,7 +43,7 @@ struct PanelView: View {
                 LinearGradient(colors: [Palette.teal.opacity(colorScheme == .dark ? 0.08 : 0.035), .clear, Palette.mint.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing)
             }
         }
-        .tint(Palette.teal)
+        .tint(nil as Color?)
         .sheet(item: $editingAccount) { account in
             AccountEditor(store: store, account: account)
         }
@@ -52,7 +52,7 @@ struct PanelView: View {
     private var toolbar: some View {
         HStack(spacing: 8) {
             Image(systemName: "circle.hexagongrid.fill").font(.system(size: 14, weight: .medium)).foregroundStyle(Palette.teal)
-            Text("CODEX / AUTH").font(.system(size: 12, weight: .bold, design: .monospaced)).tracking(1.2)
+            Text("Codex Auth").font(.system(size: 15, weight: .semibold))
             if store.demo { Text("DEMO").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary) }
             Spacer()
             Button { Task { await store.refresh() } } label: {
@@ -66,7 +66,7 @@ struct PanelView: View {
             .help(store.settings ? "返回" : "设置").accessibilityLabel(store.settings ? "返回" : "设置")
             .disabled(store.loginPhase != nil)
         }
-        .buttonStyle(.glass).controlSize(.small).tint(nil as Color?)
+        .buttonStyle(.glass(.regular.tint(nil))).controlSize(.small).tint(nil as Color?)
     }
 
     private var hero: some View {
@@ -80,7 +80,7 @@ struct PanelView: View {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.mini)
                         if phase == .waiting {
-                            Button("取消") { store.cancelLogin() }.buttonStyle(.glass).controlSize(.small)
+                            Button("取消") { store.cancelLogin() }.buttonStyle(.glass(.regular.tint(nil))).controlSize(.small)
                                 .accessibilityLabel("取消添加账号")
                         }
                     }.frame(height: 25)
@@ -88,7 +88,7 @@ struct PanelView: View {
                     Button { store.addAccount() } label: {
                         Label("添加账号", systemImage: "plus").font(.system(size: 11, weight: .medium))
                     }
-                    .buttonStyle(.glass).controlSize(.small).disabled(!store.addAvailable)
+                    .buttonStyle(.glass(.regular.tint(nil))).controlSize(.small).disabled(!store.addAvailable)
                     .help(store.demo ? "演示模式不会打开真实登录" : "在浏览器登录，只添加到列表，不切换当前账号。")
                 }
             }
@@ -158,7 +158,7 @@ struct PanelView: View {
                     Label("切换", systemImage: "arrow.left.arrow.right")
                         .font(.system(size: 11, weight: .medium))
                 }
-                .buttonStyle(.glass).controlSize(.small).disabled(!store.switchAvailable)
+                .buttonStyle(.glass(.regular.tint(nil))).controlSize(.small).disabled(!store.switchAvailable)
                 .accessibilityLabel("切换到 " + store.label(account))
                 .accessibilityHint("切换后请手动重启 Codex。")
                 .help(store.demo ? "演示模式不会切换真实账号" : "切换登录文件后，请手动重启 Codex。重名账号需先设置唯一别名。")
@@ -312,7 +312,7 @@ struct PanelView: View {
             Link(destination: URL(string: "https://github.com/procaross/codex-auth")!) {
                 Label("开源项目", systemImage: "arrow.up.right.square").font(.system(size: 12))
             }
-            Button("退出 Codex Auth", action: quit).buttonStyle(.glass)
+            Button("退出 Codex Auth", action: quit).buttonStyle(.glass(.regular.tint(nil)))
         }
     }
 
