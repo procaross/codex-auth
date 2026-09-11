@@ -5,7 +5,8 @@
 ### Native macOS menu bar app
 
 This fork also includes a [native macOS 26 menu bar companion](native/menubar/README.md)
-with Liquid Glass, an animated halftone robot, Chinese account / quota cards,
+with Liquid Glass, an animated halftone robot, weekly quota notifications,
+account organization, local model/token charts and API-equivalent cost estimates,
 subscription snapshots, and reset news. It bundles the CLI and defaults to the
 local proxy on port 7890. Account switching still requires a manual Codex restart.
 

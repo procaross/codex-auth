@@ -79,9 +79,10 @@ struct PixelRobot: View {
 
 struct DotMeter: View {
     let remaining: Double?
+    var threshold: Double = 10
     var body: some View {
         Canvas { context, size in
-            let count = 28
+            let count = max(12, Int(size.width / 5.5))
             let filled = remaining.map { Int(ceil($0 / 100 * Double(count * 3))) } ?? 0
             let step = size.width / Double(count)
             let dotSize = min(2.4, step * 0.52)
@@ -94,7 +95,7 @@ struct DotMeter: View {
                 }
             }
             context.fill(off, with: .color(.secondary.opacity(0.17)))
-            context.fill(on, with: .color((remaining ?? 100) <= 10 ? Palette.coral : Palette.teal))
+            context.fill(on, with: .color((remaining ?? 100) <= threshold ? Palette.coral : Palette.teal))
         }
         .frame(height: 13).accessibilityHidden(true)
     }

@@ -30,6 +30,16 @@ final class CompanionPanel: NSPanel {
             button.setAccessibilityLabel("Codex Auth，查看额度与账号")
         }
         store.onChange = { [weak self] in self?.updateStatus() }
+        if !demo {
+            let notifications = QuotaNotifications()
+            notifications.onOpen = { [weak self] key in
+                guard let self else { return }
+                if let key, self.store.accounts.contains(where: { $0.id == key }) { self.store.selectedKey = key }
+                self.store.tab = 0; self.store.settings = false; self.showPanel()
+            }
+            store.notifications = notifications
+            Task { await store.configureNotifications() }
+        }
         updateStatus()
         let screen = statusItem.button?.window?.screen ?? NSScreen.main
         let height = min(704, (screen?.visibleFrame.height ?? 850) - 24)
@@ -65,6 +75,7 @@ final class CompanionPanel: NSPanel {
         panel.contentView = glass
         let refreshTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
+                self?.updateStatus()
                 await self?.store.refreshIfNeeded()
             }
         }
@@ -112,8 +123,10 @@ final class CompanionPanel: NSPanel {
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
+            if self.panel.attachedSheet != nil { return event }
             if event.type == .keyDown && event.keyCode == 53 { self.closePanel(); return nil }
-            if event.type != .keyDown && event.window !== self.panel && event.window !== self.statusItem.button?.window { self.closePanel() }
+            // Native menus and sheets own their click tracking. External clicks
+            // are handled by the global monitor; keep local editors open.
             return event
         }
     }
@@ -135,10 +148,9 @@ final class CompanionPanel: NSPanel {
 
     private func updateStatus() {
         let account = store.active
-        let remaining = account?.fiveHour?.remaining ?? account?.weekly?.remaining
-        statusItem.button?.title = remaining.map { " \(Int($0.rounded()))%" } ?? ""
-        let period = account?.fiveHour != nil ? "5 小时" : "每周"
-        statusItem.button?.toolTip = "Codex Auth" + (remaining.map { " · \(period)剩余 \(Int($0.rounded()))%（缓存）" } ?? " · 暂无额度数据")
+        let remaining = account?.weekly?.remaining
+        statusItem.button?.title = store.companion.statusDisplay.text(weekly: account?.weekly)
+        statusItem.button?.toolTip = "Codex Auth" + (remaining.map { " · 每周剩余 \(Int($0.rounded()))%（缓存）" } ?? " · 暂无每周额度数据")
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(); return true }

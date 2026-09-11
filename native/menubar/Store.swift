@@ -87,6 +87,13 @@ final class CommandRunner: @unchecked Sendable {
     @Published var tab = 0
     @Published var settings = false
     @Published var loginPhase: AccountLoginPhase?
+    @Published var companion = CompanionState()
+    @Published var statistics = UsageStatistics()
+    @Published var statisticsBusy = false
+    @Published var statisticsProgress = ""
+    @Published var statisticsError: String?
+    @Published var notificationStatus = "尚未允许通知"
+    var notifications: QuotaNotifications?
     let demo: Bool
     let codexHome: URL
     let runner = CommandRunner()
@@ -97,6 +104,10 @@ final class CommandRunner: @unchecked Sendable {
     private let cliOverride: URL?
     private let now: () -> Date
     private var stopping = false
+    private var stateReadable = true
+    private var statisticsTask: Task<Void, Never>?
+    private var lastScan = Date.distantPast
+    private let scanner = UsageScanner()
 
     init(demo: Bool = false, home: URL? = nil, cli: URL? = nil, now: @escaping () -> Date = Date.init) {
         self.demo = demo
@@ -105,14 +116,97 @@ final class CommandRunner: @unchecked Sendable {
         let customHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
         codexHome = home ?? customHome.map { URL(fileURLWithPath: $0, isDirectory: true) } ??
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
-        if demo { loadDemo() } else { reload() }
+        if demo { loadDemo(); loadDemoStatistics() } else {
+            do { companion = try CompanionState.read(home: codexHome) }
+            catch { stateReadable = false; self.error = "菜单设置无法读取，暂时不保存修改。请检查 menubar/state.json。" }
+            reload()
+            // Stored samples seed alerts quietly; new observations notify after refresh.
+            for account in accounts where companion.alertLedger[account.id] == nil {
+                _ = companion.observe(account, now: now(), deliveryAllowed: false)
+            }
+            saveCompanion()
+        }
     }
 
     var selected: AccountRecord? { accounts.first { $0.id == selectedKey } }
     var active: AccountRecord? { accounts.first { $0.id == activeKey } }
     var orderedAccounts: [AccountRecord] {
-        accounts.filter { $0.id == activeKey } + accounts.filter { $0.id != activeKey }
+        companion.visibleAccounts(accounts, active: activeKey)
     }
+    func label(_ account: AccountRecord) -> String { companion.label(account) }
+    func note(_ account: AccountRecord) -> String { companion.accounts[account.id]?.note ?? "" }
+    func saveCompanion() {
+        guard !demo, stateReadable else { onChange?(); return }
+        companion.pruneHistory(now: now())
+        do { try companion.save(home: codexHome) }
+        catch { self.error = "菜单设置未能保存，请检查目录权限。" }
+        onChange?()
+    }
+    func updatePreferences(_ edit: (inout CompanionState) -> Void) {
+        guard stateReadable || demo else { return }
+        let previous = companion
+        edit(&companion)
+        if previous.notificationsEnabled != companion.notificationsEnabled || previous.notifyAllAccounts != companion.notifyAllAccounts || previous.lowThreshold != companion.lowThreshold || previous.recoveryEnabled != companion.recoveryEnabled {
+            for account in accounts { _ = companion.observe(account, now: now(), deliveryAllowed: false) }
+        }
+        saveCompanion()
+    }
+    func decorate(_ account: AccountRecord, name: String, note: String) {
+        guard stateReadable || demo else { return }
+        companion.decorate(account.id, name: name, note: note); saveCompanion()
+    }
+    func move(_ account: AccountRecord, by delta: Int) {
+        guard stateReadable || demo else { return }
+        companion.move(account.id, by: delta, records: accounts, active: activeKey); saveCompanion()
+    }
+    func hide(_ account: AccountRecord, hidden: Bool) {
+        guard (stateReadable || demo), !hidden || account.id != activeKey else { return }
+        var decoration = companion.accounts[account.id] ?? AccountDecoration()
+        decoration.hidden = hidden; companion.accounts[account.id] = decoration
+        if hidden && selectedKey == account.id { selectedKey = active?.id ?? orderedAccounts.first?.id }
+        saveCompanion()
+    }
+    func configureNotifications() async {
+        guard !demo, let notifications else { return }
+        notificationStatus = await notifications.authorization(request: companion.notificationsEnabled)
+    }
+    func testNotification() async {
+        guard !demo, let notifications else { return }
+        let sent = await notifications.test()
+        notificationStatus = await notifications.authorization()
+        notice = sent ? "已发送测试通知。" : "通知未发送，请在系统设置中允许 Codex Auth 通知。"
+    }
+    private func recordQuota() async {
+        guard stateReadable else { return }
+        for account in accounts {
+            let eligible = (account.id == activeKey || companion.notifyAllAccounts) && (account.id == activeKey || companion.accounts[account.id]?.hidden != true)
+            let alerts = companion.observe(account, now: now(), deliveryAllowed: eligible)
+            for alert in alerts where !stopping {
+                if await notifications?.send(alert, name: label(account)) == true { companion.acknowledge(alert) }
+            }
+        }
+        saveCompanion()
+    }
+    func scanStatistics(force: Bool = false) {
+        guard !demo, !stopping, statisticsTask == nil else { return }
+        let age = now().timeIntervalSince(lastScan)
+        guard force || age >= 300 || age < 0 else { return }
+        lastScan = now(); statisticsBusy = true; statisticsError = nil; statisticsProgress = "正在整理本地记录…"
+        let home = codexHome, date = now(), scanner = scanner
+        statisticsTask = Task { [weak self] in
+            defer { self?.statisticsBusy = false; self?.statisticsTask = nil }
+            do {
+                let value = try await scanner.scan(home: home, now: date) { [weak self] done, total in
+                    await self?.scanProgress(done: done, total: total)
+                }
+                guard !Task.isCancelled else { return }
+                self?.statistics = value
+            } catch is CancellationError {} catch {
+                self?.statisticsError = "本地统计未能更新，保留上次结果。请检查日志与缓存目录权限。"
+            }
+        }
+    }
+    private func scanProgress(done: Int, total: Int) { statisticsProgress = "正在整理 \(done) / \(total) 个文件" }
     var proxyEnabled: Bool { UserDefaults.standard.object(forKey: "proxyEnabled") as? Bool ?? true }
     var executable: URL? {
         if let cliOverride { return cliOverride }
@@ -160,6 +254,7 @@ final class CommandRunner: @unchecked Sendable {
     }
 
     func stop() {
+        statisticsTask?.cancel()
         stopping = true
         loginTask?.cancel()
         runner.stop()
@@ -180,7 +275,7 @@ final class CommandRunner: @unchecked Sendable {
             registryReadable = true
             // auth.json is the selected CLI login; registry may lag behind it.
             activeKey = LocalData.metadata(at: codexHome.appendingPathComponent("auth.json"))?.key
-            if !accounts.contains(where: { $0.id == selectedKey }) { selectedKey = active?.id ?? accounts.first?.id }
+            if !orderedAccounts.contains(where: { $0.id == selectedKey }) { selectedKey = active?.id ?? orderedAccounts.first?.id }
             subscriptions = [:]
             for account in accounts {
                 subscriptions[account.id] = LocalData.subscription(for: account, home: codexHome, activeKey: activeKey)
@@ -204,11 +299,13 @@ final class CommandRunner: @unchecked Sendable {
 
     func opened() {
         visible = true
+        scanStatistics()
         reload()
         Task { await refreshIfNeeded() }
     }
 
     func refreshIfNeeded() async {
+        scanStatistics()
         guard !demo, !busy, !stopping else { return }
         let age = now().timeIntervalSince(lastAttempt)
         // A clock adjustment must not postpone updates indefinitely. Busy ticks
@@ -218,6 +315,7 @@ final class CommandRunner: @unchecked Sendable {
     }
 
     func refresh(automatically: Bool = false) async {
+        if !automatically { scanStatistics(force: true) }
         guard !busy, !stopping else { return }
         if demo {
             busy = true
@@ -238,6 +336,7 @@ final class CommandRunner: @unchecked Sendable {
         } catch { failures.append("额度刷新失败") }
         guard !stopping, !Task.isCancelled else { return }
         reload()
+        await recordQuota()
         do {
             try await runner.run(executable: executable, arguments: ["resets", "--json"], home: codexHome, proxy: proxyEnabled)
         } catch { failures.append("重置消息刷新失败") }
@@ -276,5 +375,23 @@ final class CommandRunner: @unchecked Sendable {
         subscriptions["demo::orbit"] = SubscriptionSnapshot(until: Date(timeIntervalSince1970: now + 8 * 86400), checked: Date(timeIntervalSince1970: now - 86400))
         newsChecked = Date(); newsStale = false
         news = [NewsItem(id: "demo-news", kind: .announced, title: "备用重置次数已公告", detail: "适用范围与领取条件请查看原公告。", date: Date(timeIntervalSince1970: now - 3600), source: "https://codex-resets.com")]
+    }
+
+    private func loadDemoStatistics() {
+        let date = now(), today = Calendar.current.startOfDay(for: date)
+        for day in 0..<30 {
+            let stamp = today.addingTimeInterval(Double(-day * 86400) + 3600)
+            for (index, model) in ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"].enumerated() {
+                statistics.calls.append(ModelCall(id: "demo-\(day)-\(index)", timestamp: min(stamp.timeIntervalSince1970, date.timeIntervalSince1970), session: "demo", model: model, provider: "openai", tokens: TokenTally(input: Int64(160000 + day * 6000), cached: 120000, output: Int64(5000 + index * 1100), reasoning: 2500)))
+            }
+        }
+        statistics.checkedAt = date
+        statistics.prepare(now: date)
+        for account in accounts {
+            companion.history[account.id] = (0..<42).map { index in
+                QuotaPoint(timestamp: date.addingTimeInterval(Double(index - 41) * 14400).timeIntervalSince1970,
+                           remaining: max(account.weekly?.remaining ?? 0, 100 - Double(index) * 0.8), resetsAt: account.weekly?.resetsAt)
+            }
+        }
     }
 }

@@ -14,7 +14,7 @@ Switching actions keep a fixed header slot so choosing a saved account does not
 shift the subscription record or account list. Subscription records remain saved
 login information, not confirmed billing dates.
 
-The quota/news selector is SwiftUI's native segmented `Picker` at the system's
+The quota/news/statistics selector is SwiftUI's native segmented `Picker` at the system's
 extra-large control size. macOS owns its material, selection feedback, tracking,
 and accessibility behavior. It uses the system accent and intrinsic size, with
 no custom glass overlay, painted backing, border, or drag animation. Its resting
@@ -62,9 +62,9 @@ notification helper's `com.procaross.codex-auth.notifications`.
   keychain storage. Login waits up to five minutes. Cancellation, failure and
   success remove the temporary directory. Quitting cancels pending login and
   waits for cleanup; an import already saving finishes before the app exits.
-- The menu bar shows the active account's cached five-hour remaining quota,
-  falling back to weekly quota when a five-hour window is absent. The tooltip
-  identifies the window and marks the value as cached. Open the panel to refresh.
+- The menu bar and account cards show weekly quota only. Settings can choose
+  weekly remaining percentage, a reset countdown, or just the pixel icon. The
+  tooltip marks the quota as cached; the countdown updates each minute.
 - The panel reads `CODEX_HOME/accounts/registry.json` (schemas 2–3), or
   `~/.codex/accounts/registry.json` when no `CODEX_HOME` is supplied. It resolves
   the current ChatGPT identity from `auth.json`, since the registry can lag
@@ -72,8 +72,8 @@ notification helper's `com.procaross.codex-auth.notifications`.
 - Quota refresh calls the bundled `codex-auth list --api`. The CLI remains
   responsible for API requests and its usual saved-token refresh behavior.
   The app reads structured registry data rather than parsing terminal output.
-- Known weekly-only primary windows are shown as weekly quota. Missing
-  five-hour data is displayed as unknown, never copied from the weekly window.
+- Weekly windows are recognized in either the primary or secondary position.
+  Missing weekly data is displayed as unknown, with no five-hour fallback.
   Values have a visible snapshot timestamp; API failures retain cached data.
 - Subscription dates come only from saved login claims, with the same identity
   checks and filename encoding as the CLI. They are not billing or renewal
@@ -85,6 +85,19 @@ notification helper's `com.procaross.codex-auth.notifications`.
   verifies the resulting identity. Ambiguous queries are disabled and stdin is
   closed to prevent accidental interactive selection. API-key entries are
   view-only; manage those through the CLI.
+- Each account row shows its weekly remaining percentage. Its **…** menu edits
+  a local display name and note, changes order, or hides an inactive account.
+  Settings restores hidden accounts; the active account always remains visible.
+  Hiding does not delete credentials. Display names do not change CLI aliases
+  and are never used as account-switch selectors.
+- Weekly samples are retained for 31 days. **周额度趋势** shows seven days,
+  separating reset cycles so a refill is not drawn as ordinary consumption.
+- Native system notifications warn when weekly quota reaches the configured
+  threshold (20% by default), then once more at 5%, and on observed recovery.
+  Each cycle is deduplicated on disk. Initial snapshots are quiet; stale or
+  out-of-order samples do not notify. Delivery defaults to the current account;
+  settings can include other visible accounts. macOS notification permission is
+  required. Settings includes a test notification and the system settings link.
 - **After switching, restart Codex manually.** The companion does not inject
   credentials into the running Codex app or interrupt its tasks.
 - Reset news uses `codex-auth resets --json` and the existing validated public
@@ -116,6 +129,42 @@ public reset feed. It uses the existing local CLI installation and its normal
 account API behavior. Browser authentication follows
 [OpenAI's authentication documentation](https://learn.chatgpt.com/docs/auth).
 
+## Local usage statistics
+
+The **统计** tab shows today, seven days, or thirty days of local token usage,
+daily cost/token charts, and a selectable model breakdown. Click a chart date
+for its total. Input includes cached tokens; output includes reasoning tokens,
+which are not counted twice. Counts are token-metering records, not a guaranteed
+number of HTTP requests.
+
+The scanner reads `sessions` and `archived_sessions` JSONL files in `CODEX_HOME`
+on a background actor. It streams large files with bounded line buffers, resumes
+from saved byte offsets, retries incomplete tails, and detects replaced or
+truncated files. Identical counters and archive/fork copies are deduplicated;
+inherited events before a fork's creation time are excluded. Only timestamps,
+model/provider names, hashed session IDs, and token counters enter the index;
+message content and credentials are not copied. Deleted or unavailable logs,
+missing counters and unsupported formats can make totals incomplete. Cloud-only
+tasks are outside this local view. Log metadata does not reliably identify the
+account, so statistics combine all accounts on this machine.
+
+**API-equivalent cost is an estimate, not a subscription bill.** The bundled
+price table was checked against [official OpenAI pricing](https://developers.openai.com/api/docs/pricing)
+on **2026-09-11**. It uses standard USD rates, separates uncached input, cache
+reads and cache writes, and applies documented long-context rules. It excludes
+tool fees, Fast/priority surcharges, regional prices, and discounts. The table
+is a dated snapshot, not a live price feed. Unknown models/providers, unsupported
+cache-write rates, and counter gaps that cannot identify individual requests
+are shown as unpriced; their tokens remain visible and the partial amount is
+labeled. Historical usage is valued at this price table, not historical rates.
+
+Organization, notification state, and quota samples live in
+`CODEX_HOME/menubar/state.json`. The incremental index is
+`CODEX_HOME/menubar/usage-index.json`. Both files use owner-only permissions.
+The index can be removed to rebuild it; settings and aliases remain separate.
+No statistics are uploaded. Initial indexing can take longer on large histories;
+subsequent passes process appended data and prune usage older than 31 days.
+
 ## Development and validation
 
 ```sh
@@ -139,6 +188,10 @@ malformed registries, expired forecasts, source URL handling, CLI deadlines,
 private browser-login staging, cancellation (including a process ignoring
 SIGTERM), cleanup, native CLI discovery, hidden refresh, throttling, overlap,
 busy deferral, clock changes, and recovery without losing cached quota.
+Additional checks cover weekly-only display, account ordering and hidden state,
+notification thresholds, recovery retries and deduplication, token pricing,
+malformed counters, fork/archive deduplication, partial tails, truncation,
+oversized lines, incremental persistence, and private file permissions.
 Optional real-CLI integration
 checks cover add-only imports, active-login preservation, duplicate sign-in,
 and adding the first account. Tests never open a real browser login.
