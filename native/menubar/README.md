@@ -27,6 +27,9 @@ Requires Xcode 26+ with its macOS SDK selected, a macOS build of this fork's CLI
 and Node.js **22.21+ or 24+** on the runtime machine when using the proxy.
 Node must be on `PATH`, `/opt/homebrew/bin`, or `/usr/local/bin`.
 The app bundles the CLI, but does not bundle Node.js.
+Adding accounts also requires the official Codex CLI (`npm install -g @openai/codex`).
+Native installations and npm's macOS platform packages are discovered in the
+standard Homebrew, local, Cargo, and inherited `PATH` locations.
 
 ```sh
 # Build the CLI with Zig 0.15.1 first; see the main README for SDK compatibility.
@@ -48,6 +51,17 @@ notification helper's `com.procaross.codex-auth.notifications`.
 
 ## Behavior
 
+- Click **添加账号** under the saved-account count, then complete the official
+  browser sign-in. The panel may close while you use the browser; reopen it to
+  see progress or cancel. Successful sign-in selects the saved account for
+  preview. Adding does not activate it; use **切换** separately, and refresh to
+  retrieve its quota. Signing into an existing account updates its saved login.
+- Browser login calls the installed official `codex login` with file credential
+  storage in a private, temporary `CODEX_HOME`, then runs the bundled CLI's
+  add-only `import`. It does not overwrite the active `auth.json` or use shared
+  keychain storage. Login waits up to five minutes. Cancellation, failure and
+  success remove the temporary directory. Quitting cancels pending login and
+  waits for cleanup; an import already saving finishes before the app exits.
 - The menu bar shows the active account's cached five-hour remaining quota,
   falling back to weekly quota when a five-hour window is absent. The tooltip
   identifies the window and marks the value as cached. Open the panel to refresh.
@@ -92,14 +106,18 @@ notification helper's `com.procaross.codex-auth.notifications`.
 - Left-click the status item to open or close the panel. Escape or a click
   outside closes it. Right-click offers Open and Quit. There is no Dock icon.
 
-The app does not store copies of authentication tokens, log subprocess output,
-or send account data to the public reset feed. It uses the existing local CLI
-installation and its normal account API behavior.
+Saved logins use the CLI's existing accounts directory. The app does not keep a
+separate token database, log subprocess output, or send account data to the
+public reset feed. It uses the existing local CLI installation and its normal
+account API behavior. Browser authentication follows
+[OpenAI's authentication documentation](https://learn.chatgpt.com/docs/auth).
 
 ## Development and validation
 
 ```sh
 ./scripts/test-macos-menubar.sh
+# Also exercise real CLI imports using disposable synthetic credentials:
+CODEX_AUTH_TEST_IMPORTER=/path/to/codex-auth ./scripts/test-macos-menubar.sh
 "/path/to/Codex Auth.app/Contents/MacOS/CodexAuthMenuBar" --demo
 "/path/to/Codex Auth.app/Contents/MacOS/CodexAuthMenuBar" --demo --dark
 ```
@@ -113,7 +131,11 @@ Quit one preview before starting another. Do not publish real-account screenshot
 
 The standalone Swift checks cover quota window mapping, JWT identity isolation,
 subscription dates, safe snapshot paths, ambiguous account selectors, missing /
-malformed registries, expired forecasts, source URL handling, and CLI deadlines.
+malformed registries, expired forecasts, source URL handling, CLI deadlines,
+private browser-login staging, cancellation (including a process ignoring
+SIGTERM), cleanup, and native CLI discovery. Optional real-CLI integration
+checks cover add-only imports, active-login preservation, duplicate sign-in,
+and adding the first account. Tests never open a real browser login.
 Visual checks should cover light and dark panels, account preview, scrolling,
 the animation toggle, Escape, outside-click dismissal, and reopening. Test real
 account switching only with disposable fixtures or an explicit intended switch.
