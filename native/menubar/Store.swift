@@ -404,7 +404,7 @@ final class CommandRunner: @unchecked Sendable {
         let date = now(), today = Calendar.current.startOfDay(for: date)
         for day in 0..<30 {
             let stamp = today.addingTimeInterval(Double(-day * 86400) + 3600)
-            for (index, model) in ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"].enumerated() {
+            for (index, model) in ["chatgpt-web/extra-high", "chatgpt-web/high", "chatgpt-web/pro"].enumerated() {
                 statistics.calls.append(ModelCall(id: "demo-\(day)-\(index)", timestamp: min(stamp.timeIntervalSince1970, date.timeIntervalSince1970), session: "demo", model: model, provider: "openai", tokens: TokenTally(input: Int64(160000 + day * 6000), cached: 120000, output: Int64(5000 + index * 1100), reasoning: 2500)))
             }
         }

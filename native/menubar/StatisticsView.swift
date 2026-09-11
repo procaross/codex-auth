@@ -117,7 +117,7 @@ struct StatisticsView: View {
                             Text(model.unpriced == model.calls ? "未计价" : UsageFormat.money(model.cost)).font(.system(size: 11, design: .rounded)).monospacedDigit()
                         }
                         HStack {
-                            Text("\(model.calls) 条 · " + UsageFormat.tokens(model.tokens.total) + " token")
+                            Text("\(model.calls) 条 · " + UsageFormat.tokens(model.tokens.total) + " token" + (APIPrices.usesAstraEstimate(model.id) ? " · 按 Astra 费率估算" : ""))
                             Spacer()
                             if selectedModel == model.id { Text("已筛选") }
                         }.font(.system(size: 9)).foregroundStyle(.secondary)
