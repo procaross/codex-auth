@@ -14,7 +14,7 @@ struct SystemTabs: View {
         .pickerStyle(.segmented)
         .controlSize(.extraLarge)
         .labelsHidden()
-        .tint(nil as Color?)
+        .tint(Palette.selection)
         .frame(maxWidth: .infinity)
     }
 }

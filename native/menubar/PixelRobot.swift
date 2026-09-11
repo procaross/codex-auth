@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum Palette {
+    static let selection = Color(.sRGB, red: 0.31, green: 0.46, blue: 0.48, opacity: 1)
     static let teal = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0.48, green: 0.91, blue: 0.86, alpha: 1)
