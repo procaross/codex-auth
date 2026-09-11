@@ -9,6 +9,7 @@ struct PanelView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
+    @State private var editingAccount: AccountRecord?
     let close: () -> Void
     let quit: () -> Void
 
@@ -26,7 +27,9 @@ struct PanelView: View {
                     VStack(alignment: .leading, spacing: 15) {
                         if let error = store.error ?? store.refreshError { message(error, warning: true) }
                         if let notice = store.notice { message(notice, warning: false) }
-                        if store.tab == 0 { accountContent } else { newsContent }
+                        if store.tab == 0 { accountContent }
+                        else if store.tab == 1 { newsContent }
+                        else { StatisticsView(store: store) }
                     }
                     .padding(.horizontal, 22).padding(.bottom, 18)
                 }
@@ -41,6 +44,9 @@ struct PanelView: View {
             }
         }
         .tint(Palette.teal)
+        .sheet(item: $editingAccount) { account in
+            AccountEditor(store: store, account: account)
+        }
     }
 
     private var toolbar: some View {
@@ -53,7 +59,7 @@ struct PanelView: View {
                 if store.busy { ProgressView().controlSize(.mini).frame(width: 14, height: 14) }
                 else { Image(systemName: "arrow.clockwise").frame(width: 14, height: 14) }
             }
-            .disabled(store.busy).keyboardShortcut("r").help("刷新额度与重置消息").accessibilityLabel("刷新")
+            .disabled(store.busy).keyboardShortcut("r").help("刷新额度、重置消息与本地统计").accessibilityLabel("刷新")
             Button { withAnimation(.easeInOut(duration: 0.18)) { store.settings.toggle() } } label: {
                 Image(systemName: store.settings ? "xmark" : "slider.horizontal.3").frame(width: 14, height: 14)
             }
@@ -66,9 +72,9 @@ struct PanelView: View {
     private var hero: some View {
         HStack(alignment: .center, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(store.loginPhase == .waiting ? "等待登录" : store.loginPhase == .saving ? "正在保存" : store.tab == 0 ? "账号管理" : "重置动态")
+                Text(store.loginPhase == .waiting ? "等待登录" : store.loginPhase == .saving ? "正在保存" : store.tab == 0 ? "账号管理" : store.tab == 1 ? "重置动态" : "本机调用")
                     .font(.system(size: 21, weight: .semibold))
-                Text(store.loginPhase == .waiting ? "请在浏览器中完成授权" : store.loginPhase == .saving ? "正在更新账号列表" : store.tab == 0 ? "已保存 \(store.accounts.count) 个账号" : "来自 Codex Resets")
+                Text(store.loginPhase == .waiting ? "请在浏览器中完成授权" : store.loginPhase == .saving ? "正在更新账号列表" : store.tab == 0 ? "\(store.orderedAccounts.count) 个账号 · 每周额度" : store.tab == 1 ? "来自 Codex Resets" : "Token 用量与 API 等价成本")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 if let phase = store.loginPhase {
                     HStack(spacing: 8) {
@@ -87,23 +93,23 @@ struct PanelView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            PixelRobot(running: store.visible && animationEnabled).frame(width: 168, height: 140)
+            PixelRobot(running: store.visible && animationEnabled).frame(width: store.tab == 2 ? 112 : 168, height: store.tab == 2 ? 90 : 140)
         }
-        .frame(height: 140).padding(.vertical, 4)
+        .frame(height: store.tab == 2 ? 90 : 140).padding(.vertical, 4)
     }
 
     @ViewBuilder private var accountContent: some View {
         if let account = store.selected {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(account.label).font(.system(size: 13, weight: .semibold))
+                    Text(store.label(account)).font(.system(size: 13, weight: .semibold))
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(account.email)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 8) {
                         Text(account.planLabel).font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.teal)
                             .padding(.horizontal, 6).padding(.vertical, 3)
                             .background(Palette.teal.opacity(0.08), in: Capsule()).fixedSize()
-                        if !account.alias.isEmpty {
+                        if store.label(account) != account.email {
                             Text(account.email).font(.system(size: 10)).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.middle).help(account.email)
                         } else if let name = account.accountName, !name.isEmpty {
@@ -113,28 +119,25 @@ struct PanelView: View {
                         accountAction(account)
                     }
                 }
-                HStack(alignment: .top, spacing: 20) {
-                    quota("5 小时", window: account.fiveHour)
-                    Rectangle().fill(.primary.opacity(0.07)).frame(width: 1, height: 83).padding(.top, 5)
-                    quota("每周", window: account.weekly)
-                }
+                quota("每周", window: account.weekly)
                 HStack {
                     Image(systemName: "clock").font(.system(size: 9))
                     Text(DisplayTime.relative(account.updatedAt)).font(.system(size: 10))
                         .help("额度更新时间：" + DisplayTime.full(account.updatedAt))
                     Spacer()
-                    if min(account.fiveHour?.remaining ?? 100, account.weekly?.remaining ?? 100) <= 10 {
+                    if (account.weekly?.remaining ?? 100) <= Double(store.companion.lowThreshold) {
                         Text("额度偏低").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.coral)
                     }
                 }.foregroundStyle(.secondary)
             }
             .padding(17).cardSurface()
+            QuotaHistoryView(points: store.companion.history[account.id] ?? [])
             subscriptionCard(account)
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("账号列表").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     Spacer()
-                    Text("点选查看").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("每周剩余").font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(.horizontal, 2)
                 VStack(spacing: 2) { ForEach(store.orderedAccounts) { item in accountRow(item) } }
             }
@@ -156,7 +159,7 @@ struct PanelView: View {
                         .font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.glass).controlSize(.small).disabled(!store.switchAvailable)
-                .accessibilityLabel("切换到 " + account.label)
+                .accessibilityLabel("切换到 " + store.label(account))
                 .accessibilityHint("切换后请手动重启 Codex。")
                 .help(store.demo ? "演示模式不会切换真实账号" : "切换登录文件后，请手动重启 Codex。重名账号需先设置唯一别名。")
             }
@@ -172,10 +175,10 @@ struct PanelView: View {
                     .font(.system(size: 35, weight: .medium, design: .rounded)).monospacedDigit().tracking(-1.4)
                 if window != nil { Text("%").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary) }
             }
-            .foregroundStyle(window == nil ? Color.secondary : ((window?.remaining ?? 100) <= 10 ? Palette.coral : Color.primary))
+            .foregroundStyle(window == nil ? Color.secondary : ((window?.remaining ?? 100) <= Double(store.companion.lowThreshold) ? Palette.coral : Color.primary))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title + (window.map { "剩余 \(Int($0.remaining))%" } ?? "暂无数据"))
-            DotMeter(remaining: window?.remaining)
+            DotMeter(remaining: window?.remaining, threshold: Double(store.companion.lowThreshold))
             Text(window == nil ? "未提供此项数据" : DisplayTime.reset(window?.resetDate))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
         }
@@ -204,27 +207,41 @@ struct PanelView: View {
     }
 
     private func accountRow(_ account: AccountRecord) -> some View {
-        Button { store.selectedKey = account.id; store.notice = nil } label: {
+        HStack(spacing: 0) {
+          Button { store.selectedKey = account.id; store.notice = nil } label: {
             HStack(spacing: 9) {
                 Circle().fill(account.id == store.activeKey ? Palette.teal : Color.secondary.opacity(0.3)).frame(width: 5, height: 5)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(account.label).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                    if let name = account.accountName, !name.isEmpty { Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1) }
+                    Text(store.label(account)).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Text(store.note(account).isEmpty ? (account.id == store.activeKey ? "当前登录 · " : "") + account.planLabel : store.note(account))
+                        .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                Text(account.id == store.activeKey ? "当前登录" : account.planLabel)
-                    .font(.system(size: 9)).foregroundStyle(account.id == store.activeKey ? Palette.teal : .secondary)
+                Text(account.weekly.map { "\(Int($0.remaining.rounded()))%" } ?? "—")
+                    .font(.system(size: 12, weight: .medium, design: .rounded)).monospacedDigit()
+                    .foregroundStyle((account.weekly?.remaining ?? 100) <= Double(store.companion.lowThreshold) ? Palette.coral : Palette.teal)
+                    .frame(width: 38, alignment: .trailing)
                 Image(systemName: account.id == store.selectedKey ? "checkmark.circle.fill" : "chevron.right")
                     .font(.system(size: account.id == store.selectedKey ? 12 : 9)).foregroundStyle(account.id == store.selectedKey ? Palette.teal : Color.secondary.opacity(0.5))
             }
             .padding(.horizontal, 11).padding(.vertical, 10)
-            .background(account.id == store.selectedKey ? Palette.teal.opacity(0.065) : Color.primary.opacity(0.018), in: RoundedRectangle(cornerRadius: 11))
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
-        .buttonStyle(.plain).accessibilityLabel("查看 " + account.label)
+        .buttonStyle(.plain).accessibilityLabel("查看 " + store.label(account))
         .accessibilityValue(account.id == store.activeKey ? "当前登录" : "已保存")
         .help(account.email + (account.id == store.activeKey ? "\n当前登录账号" : "\n点击查看额度，切换需使用卡片内的按钮。"))
         .accessibilityAddTraits(account.id == store.selectedKey ? [.isSelected] : [])
+          Menu {
+              Button("编辑名称与备注") { editingAccount = account }
+              Button("上移") { store.move(account, by: -1) }.disabled(store.orderedAccounts.first?.id == account.id)
+              Button("下移") { store.move(account, by: 1) }.disabled(store.orderedAccounts.last?.id == account.id)
+              Divider()
+              Button("隐藏此账号") { store.hide(account, hidden: true) }.disabled(account.id == store.activeKey)
+          } label: { Image(systemName: "ellipsis").frame(width: 20, height: 28) }
+          .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.trailing, 6)
+          .accessibilityLabel("管理 " + store.label(account))
+        }
+        .background(account.id == store.selectedKey ? Palette.teal.opacity(0.065) : Color.primary.opacity(0.018), in: RoundedRectangle(cornerRadius: 11))
     }
 
     @ViewBuilder private var newsContent: some View {
@@ -267,6 +284,7 @@ struct PanelView: View {
     private var preferences: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("设置").font(.system(size: 21, weight: .semibold)).padding(.top, 8)
+            CompanionPreferences(store: store)
             VStack(alignment: .leading, spacing: 18) {
                 Toggle(isOn: $animationEnabled) { preferenceLabel("像素动画", detail: "关闭后显示静态图像") }
                     .accessibilityLabel("像素动画").accessibilityHint("关闭后显示静态图像")
@@ -290,6 +308,7 @@ struct PanelView: View {
             Text("切换账号后需手动重启 Codex。重置动态仅供查看，不会领取或消耗重置次数。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error = store.error ?? store.refreshError { message(error, warning: true) }
+            if let notice = store.notice { message(notice, warning: false) }
             Link(destination: URL(string: "https://github.com/procaross/codex-auth")!) {
                 Label("开源项目", systemImage: "arrow.up.right.square").font(.system(size: 12))
             }
@@ -332,7 +351,7 @@ struct PanelView: View {
     }
 }
 
-private extension View {
+extension View {
     func cardSurface() -> some View {
         self.background(.background.opacity(0.36), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.045), lineWidth: 0.7))

@@ -310,6 +310,7 @@ import Foundation
         } catch { expect(Date().timeIntervalSince(start) < 3, "stalled CLI terminates within deadline") }
         try await loginChecks(at: root)
         try await backgroundRefreshChecks(at: root)
+        try await insightsChecks(at: root)
         if let importer = ProcessInfo.processInfo.environment["CODEX_AUTH_TEST_IMPORTER"] {
             try await importIntegration(at: root, executable: URL(fileURLWithPath: importer))
         }

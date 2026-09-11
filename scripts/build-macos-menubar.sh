@@ -30,7 +30,7 @@ arch=${ARCH:-$(uname -m)}
 /usr/bin/lipo "$cli_path" -verify_arch "$arch"
 xcrun swiftc -O -swift-version 5 -target "$arch-apple-macos26.0" -sdk "$sdk_path" \
   "$project_dir"/native/menubar/*.swift -o "$bundle/Contents/MacOS/CodexAuthMenuBar" \
-  -framework AppKit -framework SwiftUI -framework ServiceManagement
+  -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Charts -framework UserNotifications
 /usr/bin/codesign --force --sign - --timestamp=none "$bundle/Contents/Resources/codex-auth"
 /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
