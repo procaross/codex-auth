@@ -119,7 +119,15 @@ final class CompanionPanel: NSPanel {
         store.opened()
         removeMonitors()
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor in self?.closePanel() }
+            guard let self, self.panel.isVisible else { return }
+            let buttonFrame = self.statusItem.button.flatMap { button in
+                button.window?.convertToScreen(button.convert(button.bounds, to: nil))
+            }
+            // A status-item press may also arrive through the global monitor.
+            // Leave it to the button's mouse-up action; closing here reopens it.
+            guard PanelDismissal.shouldDismiss(at: NSEvent.mouseLocation, statusItemFrame: buttonFrame,
+                                              panelFrame: self.panel.frame, hasAttachedSheet: self.panel.attachedSheet != nil) else { return }
+            self.closePanel()
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
