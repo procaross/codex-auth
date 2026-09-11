@@ -83,7 +83,7 @@ final class CommandRunner: @unchecked Sendable {
     @Published var visible = false
     @Published var error: String?
     @Published var refreshError: String?
-    @Published var notice: String?
+    @Published private(set) var notice: String?
     @Published var tab = 0
     @Published var settings = false
     @Published var loginPhase: AccountLoginPhase?
@@ -108,6 +108,7 @@ final class CommandRunner: @unchecked Sendable {
     private var statisticsTask: Task<Void, Never>?
     private var lastScan = Date.distantPast
     private let scanner = UsageScanner()
+    private var noticeTask: Task<Void, Never>?
 
     init(demo: Bool = false, home: URL? = nil, cli: URL? = nil, now: @escaping () -> Date = Date.init) {
         self.demo = demo
@@ -129,6 +130,23 @@ final class CommandRunner: @unchecked Sendable {
     }
 
     var selected: AccountRecord? { accounts.first { $0.id == selectedKey } }
+    func showNotice(_ text: String, duration: Duration? = .seconds(4)) {
+        guard !stopping else { return }
+        dismissNotice()
+        notice = text
+        guard let duration else { return }
+        noticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: duration) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.notice = nil
+            self?.noticeTask = nil
+        }
+    }
+    func dismissNotice() {
+        noticeTask?.cancel()
+        noticeTask = nil
+        notice = nil
+    }
     var active: AccountRecord? { accounts.first { $0.id == activeKey } }
     var orderedAccounts: [AccountRecord] {
         companion.visibleAccounts(accounts, active: activeKey)
@@ -174,7 +192,11 @@ final class CommandRunner: @unchecked Sendable {
         guard !demo, let notifications else { return }
         let sent = await notifications.test()
         notificationStatus = await notifications.authorization()
-        notice = sent ? "已发送测试通知。" : "通知未发送，请在系统设置中允许 Codex Auth 通知。"
+        if sent { showNotice("已发送测试通知。") }
+        else {
+            dismissNotice()
+            error = "通知未发送，请在系统设置中允许 Codex Auth 通知。"
+        }
     }
     private func recordQuota() async {
         guard stateReadable else { return }
@@ -227,7 +249,7 @@ final class CommandRunner: @unchecked Sendable {
             error = "添加账号需要官方 Codex CLI。请先安装：npm install -g @openai/codex"; return
         }
         let existing = Set(accounts.map(\.id))
-        busy = true; error = nil; notice = nil; loginPhase = .waiting; settings = false; tab = 0
+        busy = true; error = nil; dismissNotice(); loginPhase = .waiting; settings = false; tab = 0
         loginTask = Task {
             defer { busy = false; loginPhase = nil; loginTask = nil; onChange?() }
             do {
@@ -236,9 +258,9 @@ final class CommandRunner: @unchecked Sendable {
                 }
                 reload()
                 selectedKey = key
-                notice = existing.contains(key) ? "已更新这个账号的登录信息。" : "账号已添加，点击「切换」即可使用。"
+                showNotice(existing.contains(key) ? "已更新这个账号的登录信息。" : "账号已添加，点击「切换」即可使用。", duration: .seconds(8))
             } catch is CancellationError {
-                notice = "已取消添加账号。"
+                showNotice("已取消添加账号。")
             } catch CommandError.timedOut {
                 error = loginPhase == .waiting ? "登录等待超时，请重新添加账号。" : "保存超时，请刷新检查账号列表后重试。"
             } catch {
@@ -254,6 +276,7 @@ final class CommandRunner: @unchecked Sendable {
     }
 
     func stop() {
+        dismissNotice()
         statisticsTask?.cancel()
         stopping = true
         loginTask?.cancel()
@@ -326,7 +349,7 @@ final class CommandRunner: @unchecked Sendable {
         guard let executable else { refreshError = "未找到 codex-auth。请用构建脚本打包本分支的 CLI。"; return }
         busy = true; refreshError = nil; lastAttempt = now()
         // Background maintenance must not erase login/switch feedback.
-        if !automatically { error = nil; notice = nil }
+        if !automatically { error = nil; dismissNotice() }
         let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Refresh Codex account quota")
         defer { ProcessInfo.processInfo.endActivity(activity) }
         defer { busy = false; onChange?() }
@@ -346,7 +369,7 @@ final class CommandRunner: @unchecked Sendable {
 
     func switchSelected() async {
         guard switchAvailable, let target = selected, let executable else { return }
-        busy = true; error = nil; notice = nil
+        busy = true; error = nil; dismissNotice()
         defer { busy = false; onChange?() }
         do {
             let fresh = try LocalData.registry(home: codexHome)
@@ -357,7 +380,7 @@ final class CommandRunner: @unchecked Sendable {
             try await runner.run(executable: executable, arguments: ["switch", query], home: codexHome, proxy: proxyEnabled, timeout: 15)
             reload()
             guard activeKey == target.id else { error = "未能确认账号已切换，请刷新后检查。"; return }
-            notice = "登录文件已切换。请手动重启 Codex，让 App 使用这个账号。"
+            showNotice("登录文件已切换。请手动重启 Codex，让 App 使用这个账号。", duration: nil)
         } catch { self.error = "切换未完成，请刷新后检查账号状态。"; reload() }
     }
 
