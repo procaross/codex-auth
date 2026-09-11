@@ -14,12 +14,12 @@ Switching actions keep a fixed header slot so choosing a saved account does not
 shift the subscription record or account list. Subscription records remain saved
 login information, not confirmed billing dates.
 
-The quota/news/statistics selector is SwiftUI's native segmented `Picker` at the system's
-extra-large control size. macOS owns its material, selection feedback, tracking,
-and accessibility behavior. It uses the system accent and intrinsic size, with
-no custom glass overlay, painted backing, border, or drag animation. Its resting
-appearance and interactive effects follow the OS and system accessibility settings;
-it does not apply a continuously refracting custom shader.
+The quota/news/statistics selector uses equal-width SwiftUI buttons on a continuous
+track without segment dividers. Its selection capsule uses the system's native
+Liquid Glass inside `GlassEffectContainer`, with a shared glass identity for the
+selection transition. Buttons expose their selected state to accessibility, and
+selection animation respects Reduce Motion. The glass rendering follows macOS;
+there is no custom refraction shader or saturated selection tint.
 
 ## Build and install
 
