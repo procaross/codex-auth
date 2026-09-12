@@ -299,10 +299,8 @@ struct PanelView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Toggle(isOn: $animationEnabled) { preferenceLabel("像素动画", detail: "关闭后显示静态图像") }
                     .accessibilityLabel("像素动画").accessibilityHint("关闭后显示静态图像")
-                Divider()
                 Toggle(isOn: $proxyEnabled) { preferenceLabel("使用本地代理", detail: "127.0.0.1:7890 · 下次刷新生效") }.disabled(store.busy)
                     .accessibilityLabel("使用本地代理").accessibilityHint("127.0.0.1:7890，下次刷新生效")
-                Divider()
                 Toggle(isOn: Binding(get: { loginEnabled }, set: { enabled in
                     guard !store.demo else { return }
                     do {
@@ -313,7 +311,7 @@ struct PanelView: View {
                 })) { preferenceLabel("登录时启动", detail: "启动后显示在菜单栏") }.disabled(store.demo)
                     .accessibilityLabel("登录时启动").accessibilityHint("启动后显示在菜单栏")
             }
-            .toggleStyle(.switch).controlSize(.small).padding(17).cardSurface()
+            .toggleStyle(SoftSwitchStyle()).controlSize(.small).padding(17).cardSurface()
             Text("后台约每 5 分钟刷新额度与重置动态，电脑唤醒后会补刷。收起面板后暂停动画。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("切换账号后需手动重启 Codex。重置动态仅供查看，不会领取或消耗重置次数。")

@@ -164,7 +164,7 @@ final class CommandRunner: @unchecked Sendable {
         guard stateReadable || demo else { return }
         let previous = companion
         edit(&companion)
-        if previous.notificationsEnabled != companion.notificationsEnabled || previous.notifyAllAccounts != companion.notifyAllAccounts || previous.lowThreshold != companion.lowThreshold || previous.recoveryEnabled != companion.recoveryEnabled {
+        if previous.notificationsEnabled != companion.notificationsEnabled || previous.forecastNotificationsEnabled != companion.forecastNotificationsEnabled || previous.notifyAllAccounts != companion.notifyAllAccounts || previous.lowThreshold != companion.lowThreshold || previous.recoveryEnabled != companion.recoveryEnabled {
             for account in accounts { _ = companion.observe(account, now: now(), deliveryAllowed: false) }
         }
         saveCompanion()
@@ -405,7 +405,8 @@ final class CommandRunner: @unchecked Sendable {
         for day in 0..<30 {
             let stamp = today.addingTimeInterval(Double(-day * 86400) + 3600)
             for (index, model) in ["chatgpt-web/extra-high", "chatgpt-web/high", "chatgpt-web/pro"].enumerated() {
-                statistics.calls.append(ModelCall(id: "demo-\(day)-\(index)", timestamp: min(stamp.timeIntervalSince1970, date.timeIntervalSince1970), session: "demo", model: model, provider: "openai", tokens: TokenTally(input: Int64(160000 + day * 6000), cached: 120000, output: Int64(5000 + index * 1100), reasoning: 2500)))
+                let workspace = ["codex-auth", "coinclaw", "desktop"][(day + index) % 3]
+                statistics.calls.append(ModelCall(id: "demo-\(day)-\(index)", timestamp: min(stamp.timeIntervalSince1970, date.timeIntervalSince1970), session: "demo", model: model, provider: "openai", tokens: TokenTally(input: Int64(160000 + day * 6000), cached: 120000, output: Int64(5000 + index * 1100), reasoning: 2500), workspace: workspace))
             }
         }
         statistics.checkedAt = date

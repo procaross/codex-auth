@@ -98,6 +98,9 @@ notification helper's `com.procaross.codex-auth.notifications`.
   intentionally show no forecast.
 - Native system notifications warn when weekly quota reaches the configured
   threshold (20% by default), then once more at 5%, and on observed recovery.
+  A separate forecast alert can warn once per reset cycle when the conservative
+  burn-rate projection expects depletion at least an hour before reset while
+  the account is still above the low-quota threshold.
   Each cycle is deduplicated on disk. Initial snapshots are quiet; stale or
   out-of-order samples do not notify. Delivery defaults to the current account;
   settings can include other visible accounts. macOS notification permission is
@@ -125,7 +128,8 @@ notification helper's `com.procaross.codex-auth.notifications`.
   main thread, with deadlines and no captured credential-bearing output.
 - Proxy use defaults to `http://127.0.0.1:7890`; disabling it removes proxy
   variables from child commands without changing shell or CLI configuration.
-- Animation and proxy preferences are native toggles. The app follows light /
+- Animation, proxy and notification preferences use compact SwiftUI switches
+  tuned for the translucent panel. The app follows light /
   dark appearance, Reduce Motion, and Reduce Transparency. Login launch is
   opt-in through Apple's `SMAppService`, and can require System Settings approval.
 - Left-click the status item to open or close the panel. Escape or a click
@@ -140,8 +144,9 @@ account API behavior. Browser authentication follows
 ## Local usage statistics
 
 The **统计** tab shows today, seven days, or thirty days of local token usage,
-daily cost/token charts, and a selectable model breakdown. Click a chart date
-for its total. Input includes cached tokens; output includes reasoning tokens,
+daily cost/token charts, selectable workspace and model breakdowns. Drag across
+a chart to inspect an exact day; quota history supports the same interaction and
+uses stable day ticks instead of repeated automatic labels. Input includes cached tokens; output includes reasoning tokens,
 which are not counted twice. Counts are token-metering records, not a guaranteed
 number of HTTP requests.
 
@@ -154,7 +159,8 @@ on a background actor. It streams large files with bounded line buffers, resumes
 from saved byte offsets, retries incomplete tails, and detects replaced or
 truncated files. Identical counters and archive/fork copies are deduplicated;
 inherited events before a fork's creation time are excluded. Only timestamps,
-model/provider names, hashed session IDs, and token counters enter the index;
+model/provider names, hashed session IDs, the final component of the session
+`cwd` as a workspace label, and token counters enter the index;
 message content and credentials are not copied. Deleted or unavailable logs,
 missing counters and unsupported formats can make totals incomplete. Cloud-only
 tasks are outside this local view. Log metadata does not reliably identify the

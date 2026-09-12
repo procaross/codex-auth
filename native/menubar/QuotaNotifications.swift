@@ -21,9 +21,20 @@ import UserNotifications
         let status = await center.notificationSettings()
         guard status.authorizationStatus == .authorized || status.authorizationStatus == .provisional else { return false }
         let content = UNMutableNotificationContent()
-        content.title = alert.kind == .recovered ? "每周额度已恢复" : "每周额度偏低"
-        content.body = "\(name) · 每周剩余 \(Int(alert.point.remaining.rounded()))%。" +
-            (alert.kind == .recovered ? "可以继续使用。" : DisplayTime.reset(alert.point.resetsAt.map(Date.init(timeIntervalSince1970:))) + "。")
+        switch alert.kind {
+        case .recovered:
+            content.title = "每周额度已恢复"
+            content.body = "\(name) · 每周剩余 \(Int(alert.point.remaining.rounded()))%。可以继续使用。"
+        case .forecast:
+            content.title = "按当前速度可能提前用尽"
+            let projection = alert.projection?.outcomeText() ?? "预计会在重置前用尽"
+            content.body = "\(name) · 每周剩余 \(Int(alert.point.remaining.rounded()))% · \(projection)。" +
+                DisplayTime.reset(alert.point.resetsAt.map(Date.init(timeIntervalSince1970:))) + "。"
+        case .low, .critical:
+            content.title = "每周额度偏低"
+            content.body = "\(name) · 每周剩余 \(Int(alert.point.remaining.rounded()))%。" +
+                DisplayTime.reset(alert.point.resetsAt.map(Date.init(timeIntervalSince1970:))) + "。"
+        }
         content.sound = .default
         content.userInfo = ["account": alert.account]
         let id = SHA256.hash(data: Data(alert.id.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -35,7 +46,7 @@ import UserNotifications
         guard await authorization(request: true) == "已允许" else { return false }
         let content = UNMutableNotificationContent()
         content.title = "Codex Auth · 通知测试"
-        content.body = "周额度偏低或恢复时，会在这里提醒你。这是一条测试通知。"
+        content.body = "周额度偏低、预计提前用尽或恢复时，会在这里提醒你。这是一条测试通知。"
         content.sound = .default
         do { try await center.add(UNNotificationRequest(identifier: "quota-test", content: content, trigger: nil)); return true }
         catch { return false }
