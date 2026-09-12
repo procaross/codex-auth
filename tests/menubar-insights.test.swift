@@ -52,6 +52,16 @@ extension MenuBarTests {
         let token = TokenTally(input: 100000, cached: 50000, written: 10000, output: 1000, reasoning: 800)
         var call = ModelCall(id: "test", timestamp: now.timeIntervalSince1970, session: "session", model: "gpt-6-astra", provider: "openai", tokens: token)
         expect(abs(APIPrices.cost(call)! - 0.625) < 0.000001, "cost separates uncached, cached and cache-write input without double-charging reasoning")
+        let webToken = TokenTally(input: 100000, cached: 50000, output: 1000)
+        var webStats = UsageStatistics()
+        webStats.calls = ["chatgpt-web/extra-high", "chatgpt-web/high", "chatgpt-web/pro"].enumerated().map { index, model in
+            ModelCall(id: "web-\(index)", timestamp: now.timeIntervalSince1970, session: "web", model: model, provider: "openai", tokens: webToken)
+        }
+        webStats.prepare(now: now)
+        let webSummary = webStats.summary(days: 1, now: now)
+        expect(webSummary.total.unpriced == 0 && abs(webSummary.total.cost - 1.8) < 0.000001, "chatgpt-web tiers use Astra rates in the total")
+        expect(webSummary.daily.count == 1 && abs(webSummary.daily[0].total.cost - 1.8) < 0.000001, "chatgpt-web Astra estimates feed the daily cost chart")
+        expect(Set(webSummary.models.map(\.id)) == APIPrices.astraEstimatedModels && webSummary.models.allSatisfy { abs($0.cost - 0.6) < 0.000001 }, "chatgpt-web model names stay distinct while model costs use Astra rates")
         call.tokens = TokenTally(input: 272001, output: 1000)
         expect(abs(APIPrices.cost(call)! - 5.51502) < 0.000001, "long input applies official full-request multipliers")
         call.model = "gpt-5.5"; call.tokens = TokenTally(input: 100000, output: 1000)

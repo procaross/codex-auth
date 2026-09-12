@@ -74,6 +74,11 @@ struct ModelPrice {
 enum APIPrices {
     static let checked = "2026-09-11"
     static let source = URL(string: "https://developers.openai.com/api/docs/pricing")!
+    static let astraEstimatedModels: Set<String> = [
+        "chatgpt-web/extra-high",
+        "chatgpt-web/high",
+        "chatgpt-web/pro"
+    ]
     // Standard USD / million tokens, verified against official model pages.
     // Snapshot suffixes are matched explicitly; unknown aliases stay unpriced.
     static let models: [String: ModelPrice] = [
@@ -94,11 +99,16 @@ enum APIPrices {
         }
         return model
     }
+    static func pricingModel(_ model: String) -> String {
+        astraEstimatedModels.contains(model) ? "gpt-6-astra" : canonical(model)
+    }
+    static func usesAstraEstimate(_ model: String) -> Bool { astraEstimatedModels.contains(model) }
     static func cost(_ call: ModelCall, longSessions: Set<String> = []) -> Double? {
-        guard !call.aggregated, call.provider == "openai", let rate = models[canonical(call.model)],
+        let priceModel = pricingModel(call.model)
+        guard !call.aggregated, call.provider == "openai", let rate = models[priceModel],
               call.tokens.written == 0 || rate.written != nil else { return nil }
         let t = call.tokens
-        let long = rate.longContext && (t.input > 272000 || (rate.sessionLongContext && longSessions.contains(call.session + "|" + canonical(call.model))))
+        let long = rate.longContext && (t.input > 272000 || (rate.sessionLongContext && longSessions.contains(call.session + "|" + priceModel)))
         let input = Double(t.input - t.cached - t.written) * rate.input + Double(t.cached) * rate.cached + Double(t.written) * (rate.written ?? 0)
         // Reasoning is already part of output_tokens; never charge it twice.
         return (input * (long ? 2 : 1) + Double(t.output) * rate.output * (long ? 1.5 : 1)) / 1_000_000

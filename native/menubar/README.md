@@ -157,7 +157,10 @@ price table was checked against [official OpenAI pricing](https://developers.ope
 on **2026-09-11**. It uses standard USD rates, separates uncached input, cache
 reads and cache writes, and applies documented long-context rules. It excludes
 tool fees, Fast/priority surcharges, regional prices, and discounts. The table
-is a dated snapshot, not a live price feed. Unknown models/providers, unsupported
+is a dated snapshot, not a live price feed. `chatgpt-web/extra-high`,
+`chatgpt-web/high`, and `chatgpt-web/pro` keep their original model names in the
+statistics UI but use the bundled `gpt-6-astra` input, cached-input, cache-write,
+and output rates as an API-equivalent estimate. Unknown models/providers, unsupported
 cache-write rates, and counter gaps that cannot identify individual requests
 are shown as unpriced; their tokens remain visible and the partial amount is
 labeled. Historical usage is valued at this price table, not historical rates.
