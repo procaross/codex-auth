@@ -411,9 +411,14 @@ final class CommandRunner: @unchecked Sendable {
         statistics.checkedAt = date
         statistics.prepare(now: date)
         for account in accounts {
+            let end = account.updatedAt ?? date
+            let current = account.weekly?.remaining ?? 0
+            let span = current < 30 ? 48.0 : 32.0
+            let start = min(100, current + span)
             companion.history[account.id] = (0..<42).map { index in
-                QuotaPoint(timestamp: date.addingTimeInterval(Double(index - 41) * 14400).timeIntervalSince1970,
-                           remaining: max(account.weekly?.remaining ?? 0, 100 - Double(index) * 0.8), resetsAt: account.weekly?.resetsAt)
+                let progress = Double(index) / 41
+                return QuotaPoint(timestamp: end.addingTimeInterval(Double(index - 41) * 14400).timeIntervalSince1970,
+                                  remaining: start - (start - current) * progress, resetsAt: account.weekly?.resetsAt)
             }
         }
     }

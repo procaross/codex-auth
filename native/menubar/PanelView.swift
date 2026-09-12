@@ -119,7 +119,7 @@ struct PanelView: View {
                         accountAction(account)
                     }
                 }
-                quota("每周", window: account.weekly)
+                quota("每周", window: account.weekly, projection: store.companion.quotaProjection(for: account))
                 HStack {
                     Image(systemName: "clock").font(.system(size: 9))
                     Text(DisplayTime.relative(account.updatedAt)).font(.system(size: 10))
@@ -167,7 +167,7 @@ struct PanelView: View {
         .frame(width: 64, height: 28)
     }
 
-    private func quota(_ title: String, window: UsageWindow?) -> some View {
+    private func quota(_ title: String, window: UsageWindow?, projection: QuotaProjection? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title + "剩余").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
@@ -181,6 +181,17 @@ struct PanelView: View {
             DotMeter(remaining: window?.remaining, threshold: Double(store.companion.lowThreshold))
             Text(window == nil ? "未提供此项数据" : DisplayTime.reset(window?.resetDate))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+            if let projection {
+                HStack(spacing: 8) {
+                    Text(projection.rateText)
+                    Spacer(minLength: 4)
+                    Text(projection.outcomeText())
+                        .foregroundStyle(projection.survivesReset ? Color.secondary : Palette.coral)
+                }
+                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.75)
+                .accessibilityElement(children: .combine)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

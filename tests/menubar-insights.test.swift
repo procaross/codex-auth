@@ -49,6 +49,23 @@ extension MenuBarTests {
         expect(state.observe(account(3, seconds: 7, reset: 20000), now: now + 7, deliveryAllowed: false).isEmpty, "out-of-scope account notifications are suppressed")
         expect(state.observe(account(3, seconds: 7, reset: 20000), now: now + 7).isEmpty, "enabling account scope does not send historical alerts")
 
+        state.history[primary.id] = [
+            QuotaPoint(timestamp: now.timeIntervalSince1970 - 12 * 3600, remaining: 80, resetsAt: now.timeIntervalSince1970 + 2 * 86400),
+            QuotaPoint(timestamp: now.timeIntervalSince1970 - 6 * 3600, remaining: 70, resetsAt: now.timeIntervalSince1970 + 2 * 86400),
+            QuotaPoint(timestamp: now.timeIntervalSince1970, remaining: 60, resetsAt: now.timeIntervalSince1970 + 2 * 86400)
+        ]
+        let riskProjection = state.quotaProjection(for: account(60, reset: 2 * 86400), now: now)
+        expect(riskProjection != nil && abs(riskProjection!.burnPerDay - 40) < 0.001 && !riskProjection!.survivesReset,
+               "quota projection uses recent same-cycle burn rate and flags depletion before reset")
+        state.history[primary.id] = [
+            QuotaPoint(timestamp: now.timeIntervalSince1970 - 12 * 3600, remaining: 92, resetsAt: now.timeIntervalSince1970 + 2 * 86400),
+            QuotaPoint(timestamp: now.timeIntervalSince1970, remaining: 90, resetsAt: now.timeIntervalSince1970 + 2 * 86400)
+        ]
+        let safeProjection = state.quotaProjection(for: account(90, reset: 2 * 86400), now: now)
+        expect(safeProjection?.survivesReset == true, "quota projection reports when current burn rate survives the reset")
+        expect(state.quotaProjection(for: account(90, seconds: -3600, reset: 2 * 86400), now: now) == nil,
+               "stale quota samples are never projected")
+
         let token = TokenTally(input: 100000, cached: 50000, written: 10000, output: 1000, reasoning: 800)
         var call = ModelCall(id: "test", timestamp: now.timeIntervalSince1970, session: "session", model: "gpt-6-astra", provider: "openai", tokens: token)
         expect(abs(APIPrices.cost(call)! - 0.625) < 0.000001, "cost separates uncached, cached and cache-write input without double-charging reasoning")
@@ -62,6 +79,21 @@ extension MenuBarTests {
         expect(webSummary.total.unpriced == 0 && abs(webSummary.total.cost - 1.8) < 0.000001, "chatgpt-web tiers use Astra rates in the total")
         expect(webSummary.daily.count == 1 && abs(webSummary.daily[0].total.cost - 1.8) < 0.000001, "chatgpt-web Astra estimates feed the daily cost chart")
         expect(Set(webSummary.models.map(\.id)) == APIPrices.astraEstimatedModels && webSummary.models.allSatisfy { abs($0.cost - 0.6) < 0.000001 }, "chatgpt-web model names stay distinct while model costs use Astra rates")
+        var trendStats = UsageStatistics()
+        let calendar = Calendar.current
+        let trendToday = calendar.startOfDay(for: now)
+        let trendNow = trendToday.addingTimeInterval(12 * 3600)
+        for offset in -13...0 {
+            let stamp = calendar.date(byAdding: .day, value: offset, to: trendToday)!.addingTimeInterval(3600)
+            let input: Int64 = offset >= -6 ? 100000 : 50000
+            trendStats.calls.append(ModelCall(id: "trend-\(offset)", timestamp: stamp.timeIntervalSince1970, session: "trend", model: "gpt-6-astra", provider: "openai", tokens: TokenTally(input: input)))
+        }
+        trendStats.prepare(now: trendNow)
+        let trend = trendStats.costTrend(days: 7, now: trendNow)
+        expect(trend != nil && abs(trend!.dailyAverage - (7.0 / 6.5)) < 0.000001 && abs(trend!.changePercent! - 100) < 0.000001,
+               "cost trend extrapolates from elapsed time and compares the prior aligned window")
+        expect(trendStats.costTrend(days: 30, now: trendNow)?.changePercent == nil,
+               "30-day cost trend avoids comparison beyond retained local history")
         call.tokens = TokenTally(input: 272001, output: 1000)
         expect(abs(APIPrices.cost(call)! - 5.51502) < 0.000001, "long input applies official full-request multipliers")
         call.model = "gpt-5.5"; call.tokens = TokenTally(input: 100000, output: 1000)

@@ -20,6 +20,7 @@ struct StatisticsView: View {
 
     var body: some View {
         let summary = store.statistics.summary(days: days, model: selectedModel)
+        let trend = store.statistics.costTrend(days: days, model: selectedModel)
         VStack(alignment: .leading, spacing: 14) {
             Picker("统计范围", selection: $days) {
                 Text("今天").tag(1); Text("7 天").tag(7); Text("30 天").tag(30)
@@ -28,18 +29,30 @@ struct StatisticsView: View {
                 HStack(spacing: 7) { ProgressView().controlSize(.mini); Text(store.statisticsProgress).font(.system(size: 10)).foregroundStyle(.secondary) }
             }
             if let error = store.statisticsError { Text(error).font(.system(size: 10)).foregroundStyle(Palette.coral) }
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("API 等价成本 · USD").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Text(summary.total.unpriced == summary.total.calls && summary.total.calls > 0 ? "未计价" : UsageFormat.money(summary.total.cost))
-                        .font(.system(size: 28, weight: .medium, design: .rounded)).monospacedDigit()
-                    Text("按标准 API 单价估算").font(.system(size: 9)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("API 等价成本 · USD").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(summary.total.unpriced == summary.total.calls && summary.total.calls > 0 ? "未计价" : UsageFormat.money(summary.total.cost))
+                            .font(.system(size: 28, weight: .medium, design: .rounded)).monospacedDigit()
+                        Text("按标准 API 单价估算").font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 5) {
+                        Text("Token").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(UsageFormat.tokens(summary.total.tokens.total)).font(.system(size: 23, weight: .medium, design: .rounded)).monospacedDigit()
+                        Text("\(summary.total.calls) 条计量记录").font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 5) {
-                    Text("Token").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Text(UsageFormat.tokens(summary.total.tokens.total)).font(.system(size: 23, weight: .medium, design: .rounded)).monospacedDigit()
-                    Text("\(summary.total.calls) 条计量记录").font(.system(size: 9)).foregroundStyle(.secondary)
+                if let trend {
+                    HStack(spacing: 8) {
+                        Text("当前速度 · 日均 " + UsageFormat.money(trend.dailyAverage) + " · 月化 " + UsageFormat.money(trend.monthlyProjection))
+                        Spacer(minLength: 4)
+                        if let change = trend.changePercent, let comparisonDays = trend.comparisonDays {
+                            Text((comparisonDays == 1 ? "较昨日同期 " : "较前\(comparisonDays)天 ") + String(format: "%+.0f%%", change))
+                                .foregroundStyle(change >= 25 ? Palette.coral : change <= -25 ? Palette.teal : Color.secondary)
+                        }
+                    }.font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.72)
                 }
             }.padding(16).cardSurface()
             if summary.total.unpriced > 0 {
@@ -85,6 +98,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("本机所有账号合计，保留最近 31 天。记录不含可靠的账号归属，也不代表精确的网络请求次数。")
                     Text("费用按当前标准 API 价格估算，并非订阅账单。不含工具费用、Fast 加价、地区价格与折扣。推理 token 已包含在输出中。")
+                    Text("日均和月化按所选区间已经过的实际时长线性外推；今天和 7 天会与上一等长日内时段比较。30 天因本地仅保留 31 天记录，不显示伪精确同比。")
                     Text("价格核对：" + APIPrices.checked)
                     Link("查看官方价格", destination: APIPrices.source)
                 }.font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 7)
