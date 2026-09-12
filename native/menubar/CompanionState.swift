@@ -63,13 +63,15 @@ struct AlertLedger: Codable {
     var warnedLevel: Int
     var recoveredCycle: String?
     var pendingRecovery: QuotaPoint?
+    var forecastWarnedCycle: String?
 }
 
 struct QuotaAlert: Identifiable {
-    enum Kind { case low, critical, recovered }
+    enum Kind { case low, critical, recovered, forecast }
     let account: String
     let point: QuotaPoint
     let kind: Kind
+    var projection: QuotaProjection?
     var id: String { account + ":" + point.cycle + ":" + String(describing: kind) }
 }
 
@@ -79,11 +81,33 @@ struct CompanionState: Codable {
     var order: [String] = []
     var statusDisplay: StatusDisplay = .remaining
     var notificationsEnabled = true
+    var forecastNotificationsEnabled = true
     var notifyAllAccounts = false
     var recoveryEnabled = true
     var lowThreshold = 20
     var history: [String: [QuotaPoint]] = [:]
     var alertLedger: [String: AlertLedger] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case version, accounts, order, statusDisplay, notificationsEnabled, forecastNotificationsEnabled
+        case notifyAllAccounts, recoveryEnabled, lowThreshold, history, alertLedger
+    }
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        accounts = try values.decodeIfPresent([String: AccountDecoration].self, forKey: .accounts) ?? [:]
+        order = try values.decodeIfPresent([String].self, forKey: .order) ?? []
+        statusDisplay = try values.decodeIfPresent(StatusDisplay.self, forKey: .statusDisplay) ?? .remaining
+        notificationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        forecastNotificationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .forecastNotificationsEnabled) ?? true
+        notifyAllAccounts = try values.decodeIfPresent(Bool.self, forKey: .notifyAllAccounts) ?? false
+        recoveryEnabled = try values.decodeIfPresent(Bool.self, forKey: .recoveryEnabled) ?? true
+        lowThreshold = try values.decodeIfPresent(Int.self, forKey: .lowThreshold) ?? 20
+        history = try values.decodeIfPresent([String: [QuotaPoint]].self, forKey: .history) ?? [:]
+        alertLedger = try values.decodeIfPresent([String: AlertLedger].self, forKey: .alertLedger) ?? [:]
+    }
 
     static func location(home: URL) -> URL { home.appendingPathComponent("menubar/state.json") }
     static func read(home: URL) throws -> Self {
@@ -158,13 +182,18 @@ struct CompanionState: Codable {
             points.removeAll { now.timeIntervalSince($0.date) > 31 * 86400 }
             history[account.id] = Array(points.suffix(10000))
         }
+        let projection = quotaProjection(for: account, now: now)
+        let forecastRisk = forecastNotificationsEnabled && projection.map {
+            !$0.survivesReset && ($0.resetAt?.timeIntervalSince($0.depletionAt) ?? 0) >= 3600 && point.remaining > Double(lowThreshold)
+        } == true
         guard notificationsEnabled, deliveryAllowed, var ledger = alertLedger[account.id] else {
-            alertLedger[account.id] = AlertLedger(previous: point, warnedLevel: level)
+            alertLedger[account.id] = AlertLedger(previous: point, warnedLevel: level,
+                                                  forecastWarnedCycle: forecastRisk ? point.cycle : nil)
             return [] // Initial snapshots establish a baseline, not an alert burst.
         }
         guard stamp >= ledger.previous.timestamp else { return [] }
         let previous = ledger.previous
-        if point.cycle != previous.cycle { ledger.warnedLevel = 0 }
+        if point.cycle != previous.cycle { ledger.warnedLevel = 0; ledger.forecastWarnedCycle = nil }
         if recoveryEnabled, ledger.recoveredCycle != point.cycle,
            previous.remaining <= Double(lowThreshold), point.remaining > Double(lowThreshold + 5) {
             ledger.pendingRecovery = point
@@ -176,10 +205,13 @@ struct CompanionState: Codable {
         alertLedger[account.id] = ledger
         guard now.timeIntervalSince(point.date) <= 900 else { return [] }
         if let pending = ledger.pendingRecovery, now.timeIntervalSince(pending.date) <= 900 {
-            return [QuotaAlert(account: account.id, point: point, kind: .recovered)]
+            return [QuotaAlert(account: account.id, point: point, kind: .recovered, projection: nil)]
         }
         if level > ledger.warnedLevel {
-            return [QuotaAlert(account: account.id, point: point, kind: level == 2 ? .critical : .low)]
+            return [QuotaAlert(account: account.id, point: point, kind: level == 2 ? .critical : .low, projection: nil)]
+        }
+        if forecastRisk, ledger.forecastWarnedCycle != point.cycle {
+            return [QuotaAlert(account: account.id, point: point, kind: .forecast, projection: projection)]
         }
         return []
     }
@@ -189,6 +221,7 @@ struct CompanionState: Codable {
         case .low: ledger.warnedLevel = max(1, ledger.warnedLevel)
         case .critical: ledger.warnedLevel = 2
         case .recovered: ledger.recoveredCycle = alert.point.cycle; ledger.pendingRecovery = nil
+        case .forecast: ledger.forecastWarnedCycle = alert.point.cycle
         }
         alertLedger[alert.account] = ledger
     }

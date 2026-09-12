@@ -6,20 +6,23 @@ struct CompanionPreferences: View {
         Binding(get: { store.companion[keyPath: key] }, set: { value in store.updatePreferences { $0[keyPath: key] = value } })
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Picker("菜单栏显示", selection: preference(\.statusDisplay)) {
                 ForEach(StatusDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
             }.font(.system(size: 12))
-            Divider()
             Toggle("周额度系统通知", isOn: preference(\.notificationsEnabled))
                 .onChange(of: store.companion.notificationsEnabled) { Task { await store.configureNotifications() } }
             if store.companion.notificationsEnabled {
                 Picker("提醒阈值", selection: preference(\.lowThreshold)) {
                     ForEach([5, 10, 20, 30], id: \.self) { Text("\($0)%").tag($0) }
                 }
+                Toggle("预计提前耗尽时提醒", isOn: Binding(
+                    get: { store.companion.forecastNotificationsEnabled },
+                    set: { enabled in store.updatePreferences { $0.forecastNotificationsEnabled = enabled } }
+                ))
                 Toggle("额度恢复时提醒", isOn: preference(\.recoveryEnabled))
                 Toggle("包含其他可见账号", isOn: preference(\.notifyAllAccounts))
-                Text("默认只提醒当前登录账号；每周期提醒一次，降至 5% 时再提醒一次。首次读取不发通知。")
+                Text("默认只提醒当前登录账号；预测提醒每个重置周期最多一次，低额度与恢复提醒沿用原有去重规则。首次读取不发通知。")
                     .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text(store.notificationStatus).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -31,7 +34,6 @@ struct CompanionPreferences: View {
             }
             let hidden = store.accounts.filter { store.companion.accounts[$0.id]?.hidden == true && $0.id != store.activeKey }
             if !hidden.isEmpty {
-                Divider()
                 Text("已隐藏账号").font(.system(size: 11, weight: .medium))
                 ForEach(hidden) { account in
                     HStack {
@@ -41,7 +43,7 @@ struct CompanionPreferences: View {
                     }.font(.system(size: 10))
                 }
             }
-        }.font(.system(size: 11)).toggleStyle(.switch).controlSize(.small).padding(17).cardSurface()
+        }.font(.system(size: 11)).toggleStyle(SoftSwitchStyle()).controlSize(.small).padding(17).cardSurface()
         .task { if let notifications = store.notifications { store.notificationStatus = await notifications.authorization() } }
     }
 }

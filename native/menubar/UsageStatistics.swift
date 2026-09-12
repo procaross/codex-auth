@@ -58,6 +58,7 @@ struct ModelCall: Codable, Identifiable {
     var model: String
     var provider: String
     var tokens: TokenTally
+    var workspace: String? = nil
     var aggregated = false
     var date: Date { Date(timeIntervalSince1970: timestamp) }
 }
@@ -143,59 +144,74 @@ struct UsageCostTrend {
     let comparisonDays: Int?
 }
 
+private struct UsageSlice: Hashable {
+    let model: String
+    let workspace: String
+}
+
+private func usageWorkspace(_ value: String?) -> String {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? "其他" : trimmed
+}
+
 struct UsageStatistics {
     var calls: [ModelCall] = []
     var longSessions: Set<String> = []
     var skipped = 0
     var scannedFiles = 0
     var checkedAt: Date?
-    private var dailyModels: [Date: [String: UsageTotal]]?
+    private var dailySlices: [Date: [UsageSlice: UsageTotal]]?
     mutating func prepare(now: Date) {
-        var buckets: [Date: [String: UsageTotal]] = [:]
+        var buckets: [Date: [UsageSlice: UsageTotal]] = [:]
         let calendar = Calendar.current
         for call in calls where call.date <= now {
             let day = calendar.startOfDay(for: call.date)
-            var entry = buckets[day]?[call.model] ?? UsageTotal(id: call.model)
+            let workspace = usageWorkspace(call.workspace)
+            let key = UsageSlice(model: call.model, workspace: workspace)
+            var entry = buckets[day]?[key] ?? UsageTotal(id: call.model)
             entry.add(call, longSessions: longSessions)
-            buckets[day, default: [:]][call.model] = entry
+            buckets[day, default: [:]][key] = entry
         }
-        dailyModels = buckets
+        dailySlices = buckets
     }
-    func summary(days: Int, now: Date = Date(), model: String? = nil) -> (total: UsageTotal, daily: [DailyUsage], models: [UsageTotal]) {
+    func summary(days: Int, now: Date = Date(), model: String? = nil, workspace: String? = nil) -> (total: UsageTotal, daily: [DailyUsage], models: [UsageTotal], workspaces: [UsageTotal]) {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -(days - 1), to: today)!
-        var total = UsageTotal(id: "all"), models: [String: UsageTotal] = [:], buckets: [Date: UsageTotal] = [:]
-        if let dailyModels {
-          for (day, entries) in dailyModels where day >= start && day <= today {
-            for entry in entries.values where model == nil || entry.id == model {
+        var total = UsageTotal(id: "all"), models: [String: UsageTotal] = [:], workspaces: [String: UsageTotal] = [:], buckets: [Date: UsageTotal] = [:]
+        if let dailySlices {
+          for (day, entries) in dailySlices where day >= start && day <= today {
+            for (slice, entry) in entries where (model == nil || slice.model == model) && (workspace == nil || slice.workspace == workspace) {
                 total.add(entry)
                 var bucket = buckets[day] ?? UsageTotal(id: String(day.timeIntervalSince1970)); bucket.add(entry); buckets[day] = bucket
-                var combined = models[entry.id] ?? UsageTotal(id: entry.id); combined.add(entry); models[entry.id] = combined
+                var combined = models[slice.model] ?? UsageTotal(id: slice.model); combined.add(entry); models[slice.model] = combined
+                var workspaceTotal = workspaces[slice.workspace] ?? UsageTotal(id: slice.workspace); workspaceTotal.add(entry); workspaces[slice.workspace] = workspaceTotal
             }
           }
         } else {
-          for call in calls where call.date >= start && call.date <= now && (model == nil || call.model == model) {
+          for call in calls where call.date >= start && call.date <= now && (model == nil || call.model == model) && (workspace == nil || usageWorkspace(call.workspace) == workspace) {
             total.add(call, longSessions: longSessions)
             let day = calendar.startOfDay(for: call.date)
             var bucket = buckets[day] ?? UsageTotal(id: String(day.timeIntervalSince1970)); bucket.add(call, longSessions: longSessions); buckets[day] = bucket
             var entry = models[call.model] ?? UsageTotal(id: call.model); entry.add(call, longSessions: longSessions); models[call.model] = entry
+            let workspaceName = usageWorkspace(call.workspace)
+            var workspaceTotal = workspaces[workspaceName] ?? UsageTotal(id: workspaceName); workspaceTotal.add(call, longSessions: longSessions); workspaces[workspaceName] = workspaceTotal
           }
         }
         let daily = (0..<days).map { index -> DailyUsage in
             let date = calendar.date(byAdding: .day, value: index, to: start)!
             return DailyUsage(date: date, total: buckets[date] ?? UsageTotal(id: String(index)))
         }
-        return (total, daily, models.values.sorted { $0.tokens.total > $1.tokens.total })
+        return (total, daily, models.values.sorted { $0.cost > $1.cost }, workspaces.values.sorted { $0.cost > $1.cost })
     }
-    func costTrend(days: Int, now: Date = Date(), model: String? = nil) -> UsageCostTrend? {
+    func costTrend(days: Int, now: Date = Date(), model: String? = nil, workspace: String? = nil) -> UsageCostTrend? {
         guard days > 0 else { return nil }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         guard let currentStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return nil }
         let elapsed = now.timeIntervalSince(currentStart)
         guard elapsed >= 3600 else { return nil }
-        let current = pricedTotal(from: currentStart, through: now, model: model)
+        let current = pricedTotal(from: currentStart, through: now, model: model, workspace: workspace)
         guard current.calls > 0, current.cost > 0 else { return nil }
         let elapsedDays = elapsed / 86400
         let dailyAverage = current.cost / elapsedDays
@@ -203,7 +219,7 @@ struct UsageStatistics {
         if days <= 14,
            let previousStart = calendar.date(byAdding: .day, value: -days, to: currentStart),
            let previousEnd = calendar.date(byAdding: .day, value: -days, to: now) {
-            let previous = pricedTotal(from: previousStart, through: previousEnd, model: model)
+            let previous = pricedTotal(from: previousStart, through: previousEnd, model: model, workspace: workspace)
             if previous.calls > 0, previous.cost > 0 {
                 change = (current.cost / previous.cost - 1) * 100
                 comparisonDays = days
@@ -214,9 +230,9 @@ struct UsageStatistics {
                               changePercent: change,
                               comparisonDays: comparisonDays)
     }
-    private func pricedTotal(from start: Date, through end: Date, model: String?) -> UsageTotal {
+    private func pricedTotal(from start: Date, through end: Date, model: String?, workspace: String?) -> UsageTotal {
         var total = UsageTotal(id: "trend")
-        for call in calls where call.date >= start && call.date <= end && (model == nil || call.model == model) {
+        for call in calls where call.date >= start && call.date <= end && (model == nil || call.model == model) && (workspace == nil || usageWorkspace(call.workspace) == workspace) {
             total.add(call, longSessions: longSessions)
         }
         return total
@@ -231,6 +247,7 @@ struct RolloutCursor: Codable {
     var inode: UInt64 = 0
     var model = "未知模型"
     var provider = "unknown"
+    var workspace = "其他"
     var session = ""
     var turn = ""
     var started: Double = 0
@@ -246,6 +263,7 @@ struct RolloutCursor: Codable {
             provider = payload["model_provider"] as? String ?? "unknown"
             session = Self.digest(payload["id"] as? String ?? payload["session_id"] as? String ?? session)
             started = RolloutDates.parse(payload["timestamp"])?.timeIntervalSince1970 ?? 0
+            if let cwd = payload["cwd"] as? String { workspace = Self.workspaceLabel(cwd) }
         } else if type == "turn_context" {
             model = payload["model"] as? String ?? "未知模型"
             turn = payload["turn_id"] as? String ?? ""
@@ -265,8 +283,15 @@ struct RolloutCursor: Codable {
             guard date >= cutoff, date.timeIntervalSince1970 >= started else { return }
             let fingerprint = "\(object["timestamp"] ?? "")|\(turn.isEmpty ? session : turn)|\(model)|\(provider)|\(tokens.input)|\(tokens.cached)|\(tokens.written)|\(tokens.output)"
             calls.append(ModelCall(id: Self.digest(fingerprint), timestamp: date.timeIntervalSince1970, session: session,
-                                   model: model, provider: provider, tokens: tokens, aggregated: last == nil || (delta != nil && delta != last)))
+                                   model: model, provider: provider, tokens: tokens, workspace: workspace,
+                                   aggregated: last == nil || (delta != nil && delta != last)))
         }
+    }
+    static func workspaceLabel(_ path: String) -> String {
+        let cleaned = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "其他" }
+        let name = URL(fileURLWithPath: cleaned).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "其他" : String(name.prefix(64))
     }
     static func digest(_ string: String) -> String {
         SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -274,7 +299,7 @@ struct RolloutCursor: Codable {
 }
 
 private struct UsageIndex: Codable {
-    var version = 1
+    var version = 2
     var files: [String: RolloutCursor] = [:]
 }
 
@@ -285,7 +310,7 @@ actor UsageScanner {
     func scan(home: URL, now: Date = Date(), progress: @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> UsageStatistics {
         let cache = home.appendingPathComponent("menubar/usage-index.json")
         if loadedHome != home {
-            if let data = try? LocalData.boundedData(cache, limit: 96 * 1024 * 1024), let saved = try? JSONDecoder().decode(UsageIndex.self, from: data), saved.version == 1 {
+            if let data = try? LocalData.boundedData(cache, limit: 96 * 1024 * 1024), let saved = try? JSONDecoder().decode(UsageIndex.self, from: data), saved.version == 2 {
                 index = saved
             } else { index = UsageIndex() }
             loadedHome = home

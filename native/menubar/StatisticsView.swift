@@ -15,12 +15,15 @@ struct StatisticsView: View {
     @State private var days = 7
     @State private var metric = 0
     @State private var selectedModel: String?
+    @State private var selectedWorkspace: String?
     @State private var selectedDay: Date?
     @State private var showDetails = false
 
     var body: some View {
-        let summary = store.statistics.summary(days: days, model: selectedModel)
-        let trend = store.statistics.costTrend(days: days, model: selectedModel)
+        let summary = store.statistics.summary(days: days, model: selectedModel, workspace: selectedWorkspace)
+        let trend = store.statistics.costTrend(days: days, model: selectedModel, workspace: selectedWorkspace)
+        let axisDates = sampledDates(summary.daily.map(\.date), limit: 4)
+        let selectedUsage = summary.daily.first { Calendar.current.isDate($0.date, inSameDayAs: selectedDay ?? .distantPast) }
         VStack(alignment: .leading, spacing: 14) {
             Picker("统计范围", selection: $days) {
                 Text("今天").tag(1); Text("7 天").tag(7); Text("30 天").tag(30)
@@ -61,25 +64,43 @@ struct StatisticsView: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(selectedModel ?? "每日用量").font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    Text(selectedWorkspace.map { "工作区 · " + $0 } ?? selectedModel ?? "每日用量").font(.system(size: 11, weight: .semibold)).lineLimit(1)
                     Spacer()
                     Picker("图表指标", selection: $metric) { Text("费用").tag(0); Text("Token").tag(1) }
                         .pickerStyle(.segmented).controlSize(.mini).labelsHidden().frame(width: 112)
                 }
-                Chart(summary.daily) { day in
-                    BarMark(x: .value("日期", day.date, unit: .day), y: .value(metric == 0 ? "美元" : "Token", metric == 0 ? day.total.cost : Double(day.total.tokens.total)))
-                        .foregroundStyle(Palette.teal.gradient).cornerRadius(3)
+                Chart {
+                    ForEach(summary.daily) { day in
+                        BarMark(x: .value("日期", day.date, unit: .day), y: .value(metric == 0 ? "美元" : "Token", metric == 0 ? day.total.cost : Double(day.total.tokens.total)))
+                            .foregroundStyle(Palette.teal.gradient).cornerRadius(3)
+                            .opacity(selectedDay == nil || Calendar.current.isDate(day.date, inSameDayAs: selectedDay!) ? 1 : 0.38)
+                    }
                     if let selectedDay {
-                        RuleMark(x: .value("选中日期", selectedDay, unit: .day)).foregroundStyle(.secondary.opacity(0.35))
+                        RuleMark(x: .value("选中日期", selectedDay, unit: .day))
+                            .foregroundStyle(.secondary.opacity(0.26))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                     }
                 }
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: min(days, 5))) { _ in AxisValueLabel(format: .dateTime.month().day()) } }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
-                .chartXSelection(value: $selectedDay)
+                .chartXAxis { AxisMarks(values: axisDates) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.08)); AxisValueLabel(format: .dateTime.month().day()) } }
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.12)); AxisValueLabel() } }
+                .chartXScale(range: .plotDimension(startPadding: 10, endPadding: 10))
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle().fill(.clear).contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                if case let .active(location) = phase { updateSelection(location, proxy: proxy, geometry: geometry, target: $selectedDay) }
+                            }
+                            .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { value in
+                                updateSelection(value.location, proxy: proxy, geometry: geometry, target: $selectedDay)
+                            })
+                    }
+                }
                 .frame(height: 128)
-                if let day = summary.daily.first(where: { Calendar.current.isDate($0.date, inSameDayAs: selectedDay ?? .distantPast) }) {
-                    Text(day.date.formatted(.dateTime.month().day()) + " · " + UsageFormat.money(day.total.cost) + " · " + UsageFormat.tokens(day.total.tokens.total) + " token")
-                        .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+                if let selectedUsage {
+                    Text(selectedUsage.date.formatted(.dateTime.month().day()) + " · " + UsageFormat.money(selectedUsage.total.cost) + " · " + UsageFormat.tokens(selectedUsage.total.tokens.total) + " token")
+                        .font(.system(size: 9, weight: .medium)).monospacedDigit().foregroundStyle(Palette.teal)
+                } else {
+                    Text("拖动图表查看单日费用与 Token").font(.system(size: 9)).foregroundStyle(.secondary)
                 }
                 HStack {
                     Text("输入 " + UsageFormat.tokens(summary.total.tokens.input))
@@ -89,6 +110,7 @@ struct StatisticsView: View {
                 Text("缓存命中 " + UsageFormat.tokens(summary.total.tokens.cached) + " · " + String(format: "%.0f%%", summary.total.tokens.input > 0 ? Double(summary.total.tokens.cached) / Double(summary.total.tokens.input) * 100 : 0))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }.padding(16).cardSurface()
+            workspaceBreakdown
             modelBreakdown
             if summary.total.calls == 0 && !store.statisticsBusy {
                 Text("这个时间范围内没有本地计量记录。云端任务和未保留的日志不包含在内。")
@@ -114,6 +136,38 @@ struct StatisticsView: View {
         .onAppear { store.scanStatistics() }
     }
 
+    private var workspaceBreakdown: some View {
+        let workspaces = store.statistics.summary(days: days).workspaces
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("按工作区").font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if selectedWorkspace != nil { Button("显示全部") { selectedWorkspace = nil }.font(.system(size: 10)).buttonStyle(.plain) }
+            }
+            ForEach(workspaces.prefix(5)) { workspace in
+                Button {
+                    selectedWorkspace = selectedWorkspace == workspace.id ? nil : workspace.id
+                    selectedModel = nil; selectedDay = nil
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "folder.fill").font(.system(size: 9)).foregroundStyle(Palette.teal)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(workspace.id).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                            Text("\(workspace.calls) 条 · " + UsageFormat.tokens(workspace.tokens.total) + " token")
+                                .font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(workspace.unpriced == workspace.calls ? "未计价" : UsageFormat.money(workspace.cost))
+                            .font(.system(size: 11, design: .rounded)).monospacedDigit()
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(selectedWorkspace == workspace.id ? Palette.teal.opacity(0.08) : .primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
+                }.buttonStyle(.plain).accessibilityLabel("筛选工作区 " + workspace.id)
+            }
+            if workspaces.count > 5 { Text("另有 \(workspaces.count - 5) 个工作区").font(.system(size: 9)).foregroundStyle(.secondary) }
+        }
+    }
+
     private var modelBreakdown: some View {
         let models = store.statistics.summary(days: days).models
         return VStack(alignment: .leading, spacing: 10) {
@@ -123,7 +177,7 @@ struct StatisticsView: View {
                 if selectedModel != nil { Button("显示全部") { selectedModel = nil }.font(.system(size: 10)).buttonStyle(.plain) }
             }
             ForEach(models) { model in
-                Button { selectedModel = selectedModel == model.id ? nil : model.id } label: {
+                Button { selectedModel = selectedModel == model.id ? nil : model.id; selectedWorkspace = nil; selectedDay = nil } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Text(model.id).font(.system(size: 11, weight: .medium)).lineLimit(1)
@@ -146,24 +200,80 @@ struct StatisticsView: View {
 struct QuotaHistoryView: View {
     let points: [QuotaPoint]
     @State private var expanded = false
+    @State private var selectedTime: Date?
     var body: some View {
         DisclosureGroup("周额度趋势 · 7 天", isExpanded: $expanded) {
             let recent = points.filter { $0.date >= Date().addingTimeInterval(-7 * 86400) }
+            let selectedPoint = selectedTime.flatMap { target in recent.min { abs($0.date.timeIntervalSince(target)) < abs($1.date.timeIntervalSince(target)) } }
+            let singleDay = recent.first.map { first in recent.last.map { Calendar.current.isDate(first.date, inSameDayAs: $0.date) } ?? true } ?? true
+            let axisDates = singleDay ? sampledDates(recent.map(\.date), limit: 4) : sampledDayDates(recent.map(\.date), limit: 4)
             if recent.count < 2 {
                 Text("从本次启用开始记录，至少两次刷新后显示趋势。")
                     .font(.system(size: 10)).foregroundStyle(.secondary).padding(.vertical, 10)
             } else {
-                Chart(recent) { point in
-                    LineMark(x: .value("时间", point.date), y: .value("剩余百分比", point.remaining), series: .value("重置周期", point.cycle))
-                        .foregroundStyle(Palette.teal).lineStyle(StrokeStyle(lineWidth: 1.7))
+                Chart {
+                    ForEach(recent) { point in
+                        LineMark(x: .value("时间", point.date), y: .value("剩余百分比", point.remaining), series: .value("重置周期", point.cycle))
+                            .foregroundStyle(Palette.teal).lineStyle(StrokeStyle(lineWidth: 1.7))
+                    }
+                    if let selectedPoint {
+                        RuleMark(x: .value("选中时间", selectedPoint.date))
+                            .foregroundStyle(.secondary.opacity(0.28)).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    }
                 }
                 .chartYScale(domain: 0...100)
-                .chartYAxis { AxisMarks(values: [0, 50, 100]) }
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.month().day()) } }
+                .chartYAxis { AxisMarks(position: .leading, values: [0, 50, 100]) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.12)); AxisValueLabel() } }
+                .chartXAxis {
+                    if singleDay { AxisMarks(values: axisDates) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.08)); AxisValueLabel(format: .dateTime.hour()) } }
+                    else { AxisMarks(values: axisDates) { _ in AxisGridLine().foregroundStyle(.secondary.opacity(0.08)); AxisValueLabel(format: .dateTime.month().day()) } }
+                }
+                .chartXScale(range: .plotDimension(startPadding: 12, endPadding: 12))
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle().fill(.clear).contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                if case let .active(location) = phase { updateSelection(location, proxy: proxy, geometry: geometry, target: $selectedTime) }
+                            }
+                            .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { value in
+                                updateSelection(value.location, proxy: proxy, geometry: geometry, target: $selectedTime)
+                            })
+                    }
+                }
                 .frame(height: 100).padding(.top, 12)
-                Text("每 5 分钟保存一次；不同重置周期分开显示。")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                if let selectedPoint {
+                    Text(selectedPoint.date.formatted(.dateTime.month().day().hour().minute()) + " · 剩余 " + String(format: "%.0f%%", selectedPoint.remaining))
+                        .font(.system(size: 9, weight: .medium)).monospacedDigit().foregroundStyle(Palette.teal)
+                } else {
+                    Text("拖动查看精确值 · 每 5 分钟保存一次 · 不同重置周期分开显示")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                }
             }
         }.font(.system(size: 10)).padding(.horizontal, 3)
+        .onChange(of: expanded) { _, isExpanded in if !isExpanded { selectedTime = nil } }
     }
+}
+
+private func sampledDates(_ dates: [Date], limit: Int) -> [Date] {
+    guard dates.count > limit, limit > 1 else { return dates }
+    return (0..<limit).map { dates[Int((Double($0) * Double(dates.count - 1) / Double(limit - 1)).rounded())] }
+}
+
+private func sampledDayDates(_ dates: [Date], limit: Int) -> [Date] {
+    var seen: Set<Date> = []
+    let days = dates.compactMap { date -> Date? in
+        let day = Calendar.current.startOfDay(for: date)
+        return seen.insert(day).inserted ? day : nil
+    }
+    if days.count <= 3 { return days }
+    // Keep the far-right edge clear so Swift Charts never truncates the last
+    // date label; the exact newest point remains available through selection.
+    return sampledDates(Array(days.dropLast()), limit: min(limit, days.count - 1))
+}
+
+private func updateSelection(_ location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy, target: Binding<Date?>) {
+    guard let anchor = proxy.plotFrame else { return }
+    let frame = geometry[anchor]
+    let x = location.x - frame.minX
+    guard x >= 0, x <= frame.width, let date: Date = proxy.value(atX: x) else { return }
+    target.wrappedValue = date
 }

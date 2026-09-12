@@ -66,6 +66,16 @@ extension MenuBarTests {
         expect(state.quotaProjection(for: account(90, seconds: -3600, reset: 2 * 86400), now: now) == nil,
                "stale quota samples are never projected")
 
+        state = CompanionState()
+        expect(state.observe(account(80, seconds: -12 * 3600, reset: 2 * 86400), now: now - 12 * 3600).isEmpty,
+               "forecast notifications establish a baseline before alerting")
+        let forecast = state.observe(account(60, reset: 2 * 86400), now: now)
+        expect(forecast.first?.kind == .forecast && forecast.first?.projection?.survivesReset == false,
+               "forecast notification warns once when depletion precedes reset")
+        state.acknowledge(forecast[0])
+        expect(state.observe(account(60, reset: 2 * 86400), now: now).isEmpty,
+               "forecast notification is deduplicated for the reset cycle")
+
         let token = TokenTally(input: 100000, cached: 50000, written: 10000, output: 1000, reasoning: 800)
         var call = ModelCall(id: "test", timestamp: now.timeIntervalSince1970, session: "session", model: "gpt-6-astra", provider: "openai", tokens: token)
         expect(abs(APIPrices.cost(call)! - 0.625) < 0.000001, "cost separates uncached, cached and cache-write input without double-charging reasoning")
@@ -79,6 +89,16 @@ extension MenuBarTests {
         expect(webSummary.total.unpriced == 0 && abs(webSummary.total.cost - 1.8) < 0.000001, "chatgpt-web tiers use Astra rates in the total")
         expect(webSummary.daily.count == 1 && abs(webSummary.daily[0].total.cost - 1.8) < 0.000001, "chatgpt-web Astra estimates feed the daily cost chart")
         expect(Set(webSummary.models.map(\.id)) == APIPrices.astraEstimatedModels && webSummary.models.allSatisfy { abs($0.cost - 0.6) < 0.000001 }, "chatgpt-web model names stay distinct while model costs use Astra rates")
+        var workspaceStats = UsageStatistics()
+        workspaceStats.calls = [
+            ModelCall(id: "workspace-a", timestamp: now.timeIntervalSince1970, session: "a", model: "gpt-6-astra", provider: "openai", tokens: TokenTally(input: 100000), workspace: "codex-auth"),
+            ModelCall(id: "workspace-b", timestamp: now.timeIntervalSince1970, session: "b", model: "gpt-6-astra", provider: "openai", tokens: TokenTally(input: 50000), workspace: "desktop")
+        ]
+        workspaceStats.prepare(now: now)
+        let workspaceSummary = workspaceStats.summary(days: 1, now: now)
+        expect(workspaceSummary.workspaces.map(\.id) == ["codex-auth", "desktop"], "workspace attribution groups local usage by session cwd")
+        expect(workspaceStats.summary(days: 1, now: now, workspace: "desktop").total.tokens.input == 50000,
+               "workspace selection filters usage without rescanning rollout files")
         var trendStats = UsageStatistics()
         let calendar = Calendar.current
         let trendToday = calendar.startOfDay(for: now)
@@ -118,13 +138,14 @@ extension MenuBarTests {
             let tally: [String: Int] = ["input_tokens": input, "cached_input_tokens": input / 2, "output_tokens": input / 100]
             return try line("event_msg", ["type": "token_count", "info": ["total_token_usage": tally, "last_token_usage": ["input_tokens": 10000, "cached_input_tokens": 5000, "output_tokens": 100]]], seconds: seconds)
         }
-        var fixture = try line("session_meta", ["id": "synthetic-session", "timestamp": now.ISO8601Format(), "model_provider": "openai"])
+        var fixture = try line("session_meta", ["id": "synthetic-session", "timestamp": now.ISO8601Format(), "model_provider": "openai", "cwd": "/tmp/projects/codex-auth"])
         fixture.append(try line("turn_context", ["model": "gpt-6-astra", "turn_id": "turn-1"]))
         fixture.append(try usage(10000, seconds: 0)); fixture.append(try usage(10000, seconds: 0))
         try fixture.write(to: file)
         let scanner = UsageScanner()
         var result = try await scanner.scan(home: home, now: now + 10)
         expect(result.calls.count == 1 && result.calls[0].tokens.input == 10000, "duplicate cumulative events count only once")
+        expect(result.calls[0].workspace == "codex-auth", "session cwd is reduced to a local workspace label")
         let unchanged = try await scanner.scan(home: home, now: now + 10)
         expect(unchanged.calls.count == 1, "unchanged files reuse their cursor without duplication")
         let append = try usage(20000, seconds: 1)
