@@ -136,6 +136,13 @@ struct DailyUsage: Identifiable {
     var id: Date { date }
 }
 
+struct UsageCostTrend {
+    let dailyAverage: Double
+    let monthlyProjection: Double
+    let changePercent: Double?
+    let comparisonDays: Int?
+}
+
 struct UsageStatistics {
     var calls: [ModelCall] = []
     var longSessions: Set<String> = []
@@ -180,6 +187,39 @@ struct UsageStatistics {
             return DailyUsage(date: date, total: buckets[date] ?? UsageTotal(id: String(index)))
         }
         return (total, daily, models.values.sorted { $0.tokens.total > $1.tokens.total })
+    }
+    func costTrend(days: Int, now: Date = Date(), model: String? = nil) -> UsageCostTrend? {
+        guard days > 0 else { return nil }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        guard let currentStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return nil }
+        let elapsed = now.timeIntervalSince(currentStart)
+        guard elapsed >= 3600 else { return nil }
+        let current = pricedTotal(from: currentStart, through: now, model: model)
+        guard current.calls > 0, current.cost > 0 else { return nil }
+        let elapsedDays = elapsed / 86400
+        let dailyAverage = current.cost / elapsedDays
+        var change: Double?, comparisonDays: Int?
+        if days <= 14,
+           let previousStart = calendar.date(byAdding: .day, value: -days, to: currentStart),
+           let previousEnd = calendar.date(byAdding: .day, value: -days, to: now) {
+            let previous = pricedTotal(from: previousStart, through: previousEnd, model: model)
+            if previous.calls > 0, previous.cost > 0 {
+                change = (current.cost / previous.cost - 1) * 100
+                comparisonDays = days
+            }
+        }
+        return UsageCostTrend(dailyAverage: dailyAverage,
+                              monthlyProjection: dailyAverage * (365.25 / 12),
+                              changePercent: change,
+                              comparisonDays: comparisonDays)
+    }
+    private func pricedTotal(from start: Date, through end: Date, model: String?) -> UsageTotal {
+        var total = UsageTotal(id: "trend")
+        for call in calls where call.date >= start && call.date <= end && (model == nil || call.model == model) {
+            total.add(call, longSessions: longSessions)
+        }
+        return total
     }
 }
 

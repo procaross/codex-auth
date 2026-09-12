@@ -92,6 +92,10 @@ notification helper's `com.procaross.codex-auth.notifications`.
   and are never used as account-switch selectors.
 - Weekly samples are retained for 31 days. **周额度趋势** shows seven days,
   separating reset cycles so a refill is not drawn as ordinary consumption.
+- When the current reset cycle has at least 30 minutes of recent consumption data,
+  the quota card estimates the recent daily burn rate and whether the account is
+  likely to reach zero before the next weekly reset. Stale or nearly flat samples
+  intentionally show no forecast.
 - Native system notifications warn when weekly quota reaches the configured
   threshold (20% by default), then once more at 5%, and on observed recovery.
   Each cycle is deduplicated on disk. Initial snapshots are quiet; stale or
@@ -140,6 +144,10 @@ daily cost/token charts, and a selectable model breakdown. Click a chart date
 for its total. Input includes cached tokens; output includes reasoning tokens,
 which are not counted twice. Counts are token-metering records, not a guaranteed
 number of HTTP requests.
+
+The cost card also shows the current daily pace and a monthly run-rate projection.
+Today and seven-day views compare with the preceding aligned period; the thirty-day
+view omits that comparison because local usage history is retained for only 31 days.
 
 The scanner reads `sessions` and `archived_sessions` JSONL files in `CODEX_HOME`
 on a background actor. It streams large files with bounded line buffers, resumes

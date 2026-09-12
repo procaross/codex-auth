@@ -33,6 +33,31 @@ struct QuotaPoint: Codable, Identifiable {
     var cycle: String { resetsAt.map { String(Int($0)) } ?? "unknown" }
 }
 
+struct QuotaProjection: Equatable {
+    let burnPerDay: Double
+    let depletionAt: Date
+    let resetAt: Date?
+    let observedHours: Double
+
+    var survivesReset: Bool { resetAt.map { depletionAt >= $0 } ?? false }
+    var rateText: String {
+        let scope = observedHours >= 23.5 ? "近 24h" : "近 \(max(1, Int(observedHours.rounded())))h"
+        return scope + " 消耗 " + String(format: burnPerDay >= 10 ? "%.0f%%/天" : "%.1f%%/天", burnPerDay)
+    }
+    func outcomeText(now: Date = Date()) -> String {
+        if survivesReset { return "可撑过本轮重置" }
+        let seconds = max(0, depletionAt.timeIntervalSince(now))
+        if seconds < 1800 { return "按当前速度即将用尽" }
+        return "预计 " + Self.duration(seconds) + "后用尽"
+    }
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int(ceil(seconds / 60)))
+        if minutes >= 1440 { return "\(minutes / 1440)天\(minutes % 1440 / 60)小时" }
+        if minutes >= 60 { return "\(minutes / 60)小时\(minutes % 60)分" }
+        return "\(minutes)分钟"
+    }
+}
+
 struct AlertLedger: Codable {
     var previous: QuotaPoint
     var warnedLevel: Int
@@ -86,6 +111,29 @@ struct CompanionState: Codable {
         return records.enumerated().filter { $0.element.id == active || accounts[$0.element.id]?.hidden != true }
             .sorted { (positions[$0.element.id] ?? (order.count + $0.offset)) < (positions[$1.element.id] ?? (order.count + $1.offset)) }
             .map(\.element)
+    }
+    func quotaProjection(for account: AccountRecord, now: Date = Date()) -> QuotaProjection? {
+        guard let weekly = account.weekly, let stamp = account.lastUsageAt, stamp.isFinite,
+              stamp <= now.timeIntervalSince1970 + 60, now.timeIntervalSince1970 - stamp <= 1800 else { return nil }
+        let current = QuotaPoint(timestamp: stamp, remaining: weekly.remaining, resetsAt: weekly.resetsAt)
+        let start = stamp - 86400
+        var points = (history[account.id] ?? []).filter {
+            $0.cycle == current.cycle && $0.timestamp >= start && $0.timestamp <= stamp
+        }
+        if !points.contains(where: { abs($0.timestamp - stamp) < 0.5 }) { points.append(current) }
+        points.sort { $0.timestamp < $1.timestamp }
+        guard let first = points.first, let last = points.last, points.count >= 2 else { return nil }
+        let elapsed = last.timestamp - first.timestamp
+        guard elapsed >= 1800 else { return nil }
+        let drop = first.remaining - current.remaining
+        guard drop >= 0.5 else { return nil }
+        let burnPerDay = drop / elapsed * 86400
+        guard burnPerDay.isFinite, burnPerDay > 0, burnPerDay <= 1000 else { return nil }
+        let secondsToEmpty = current.remaining / burnPerDay * 86400
+        return QuotaProjection(burnPerDay: burnPerDay,
+                               depletionAt: Date(timeIntervalSince1970: stamp + secondsToEmpty),
+                               resetAt: weekly.resetDate,
+                               observedHours: elapsed / 3600)
     }
     mutating func decorate(_ key: String, name: String, note: String) {
         var value = accounts[key] ?? AccountDecoration()
