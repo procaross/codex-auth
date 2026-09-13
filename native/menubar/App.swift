@@ -196,6 +196,7 @@ final class CompanionPanel: NSPanel {
 
 @main enum CodexAuthMenuBar {
     static func main() {
+        if let code = NativeLoginItem.commandLine(CommandLine.arguments) { exit(code) }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

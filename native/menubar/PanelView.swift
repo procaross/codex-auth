@@ -8,7 +8,7 @@ struct PanelView: View {
     @AppStorage("proxyEnabled") private var proxyEnabled = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var loginEnabled = SMAppService.mainApp.status == .enabled
+    @State private var loginStatus = SMAppService.mainApp.status
     @State private var editingAccount: AccountRecord?
     let close: () -> Void
     let quit: () -> Void
@@ -46,6 +46,9 @@ struct PanelView: View {
         .tint(nil as Color?)
         .sheet(item: $editingAccount) { account in
             AccountEditor(store: store, account: account)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginStatus = SMAppService.mainApp.status
         }
     }
 
@@ -301,14 +304,17 @@ struct PanelView: View {
                     .accessibilityLabel("像素动画").accessibilityHint("关闭后显示静态图像")
                 Toggle(isOn: $proxyEnabled) { preferenceLabel("使用本地代理", detail: "127.0.0.1:7890 · 下次刷新生效") }.disabled(store.busy)
                     .accessibilityLabel("使用本地代理").accessibilityHint("127.0.0.1:7890，下次刷新生效")
-                Toggle(isOn: Binding(get: { loginEnabled }, set: { enabled in
+                Toggle(isOn: Binding(get: { loginStatus == .enabled }, set: { enabled in
                     guard !store.demo else { return }
                     do {
-                        if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-                        loginEnabled = SMAppService.mainApp.status == .enabled
-                        if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-                    } catch { store.error = "登录启动设置未完成，请在系统设置中检查登录项。" }
-                })) { preferenceLabel("登录时启动", detail: "启动后显示在菜单栏") }.disabled(store.demo)
+                        loginStatus = try NativeLoginItem.setEnabled(enabled)
+                        if loginStatus == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+                    } catch {
+                        loginStatus = SMAppService.mainApp.status
+                        store.error = "登录启动设置未完成，请在系统设置中检查登录项。"
+                    }
+                })) { preferenceLabel("登录时启动", detail: loginStatus == .requiresApproval ? "需要在系统设置中允许" : "启动后显示在菜单栏") }.disabled(store.demo)
+                    .onAppear { loginStatus = SMAppService.mainApp.status }
                     .accessibilityLabel("登录时启动").accessibilityHint("启动后显示在菜单栏")
             }
             .toggleStyle(SoftSwitchStyle()).controlSize(.small).padding(17).cardSurface()

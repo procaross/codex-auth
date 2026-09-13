@@ -188,6 +188,19 @@ subsequent passes process appended data and prune usage older than 31 days.
 
 ## Development and validation
 
+### Native login item management
+
+The installed app exposes its own `SMAppService.mainApp` registration for setup
+and diagnosis. Run `"/Applications/Codex Auth.app/Contents/MacOS/CodexAuthMenuBar"
+--login-item status` (on one line), or replace `status` with `enable` / `disable`.
+The command prints JSON with the actual system status and exits without starting
+the panel or reading account data. Changes require a bundle installed directly
+in `/Applications` or `~/Applications`; previews and `--demo` combinations cannot
+change login registration. `enable` returns a nonzero exit status if macOS still
+requires approval. The in-app switch reads the same status when settings appear
+and the app becomes active. Registration does not prove a login launch has run;
+end-to-end login verification requires a later logout/login.
+
 ```sh
 ./scripts/test-macos-menubar.sh
 # Also exercise real CLI imports using disposable synthetic credentials:
